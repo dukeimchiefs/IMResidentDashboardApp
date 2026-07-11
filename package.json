@@ -1,11 +1,11 @@
 {
-  "name": "attendance-worker",
+  "name": "im-resident-attendance-app",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local",
-    "deploy": "wrangler deploy"
+    "dev": "wrangler pages dev frontend --d1=DB",
+    "deploy": "wrangler pages deploy frontend"
   },
   "devDependencies": {
     "wrangler": "^4.110.0"

@@ -7,65 +7,58 @@ roster. See `Claude.md` for the original design spec and rationale.
 
 ## Stack
 
-Cloudflare Pages (frontend) + Cloudflare Workers (backend) + Cloudflare D1 (database) +
-Resend (magic-link email) + a Python script run daily via GitHub Actions to rotate QR
-images.
+A single **Cloudflare Pages** project serving the static frontend (`frontend/`) and the
+backend API as **Pages Functions** (`functions/`) — one deploy, one domain, no CORS or
+cross-site cookie issues. Backed by **Cloudflare D1** (database) and **Resend**
+(magic-link email). A Python script run daily via GitHub Actions rotates the QR images.
+
+Functions and frontend share one origin (`imresidentdashboardapp.pages.dev`, or a custom
+domain later) so the session cookie is always first-party — this matters because Safari
+and other browsers block third-party cookies by default, which would otherwise break
+sign-in for anyone on iOS.
 
 ## One-time setup
 
 ### 1. D1 database
 
 ```sh
-cd worker
 wrangler d1 create attendance-db
 # copy the returned database_id into wrangler.toml
 wrangler d1 execute attendance-db --remote --file=./schema.sql
 ```
 
-### 2. Worker secrets
+### 2. Pages project secrets
 
 ```sh
-wrangler secret put SESSION_SECRET     # random string, signs session cookies
-wrangler secret put QR_SECRET          # random string, must match the GitHub Actions secret below
-wrangler secret put RESEND_KEY         # Resend API key
-wrangler secret put ADMIN_EXPORT_KEY   # random string, protects GET /export
+wrangler pages secret put SESSION_SECRET   --project-name=imresidentdashboardapp  # random string, signs session cookies
+wrangler pages secret put QR_SECRET        --project-name=imresidentdashboardapp  # random string, must match the GitHub Actions secret below
+wrangler pages secret put RESEND_KEY       --project-name=imresidentdashboardapp  # Resend API key
+wrangler pages secret put ADMIN_EXPORT_KEY --project-name=imresidentdashboardapp  # random string, protects GET /export
 ```
 
-**`QR_SECRET` must be set to the exact same value in two places** — here (Worker
-secret) and as a GitHub Actions repository secret (Settings → Secrets and variables →
-Actions → `QR_SECRET`). There is no automatic sync between the two. If you ever rotate
-this secret, update both or QR validation will silently break.
+**`QR_SECRET` must be set to the exact same value in two places** — here (Pages secret)
+and as a GitHub Actions repository secret (Settings → Secrets and variables → Actions →
+`QR_SECRET`). There is no automatic sync between the two. If you ever rotate this secret,
+update both or QR validation will silently break.
 
 **Resend sandbox limitation:** until a custom domain is verified in the Resend
 dashboard, Resend only allows sending from `onboarding@resend.dev` (set as `RESEND_FROM`
-in `worker/wrangler.toml`) and only allows delivery **to your own verified Resend account
+in `wrangler.toml`) and only allows delivery **to your own verified Resend account
 email** — not to arbitrary resident inboxes. This is fine for early testing (put your own
 email in the `roster` table to receive test magic links) but **before rostering real
 residents, verify a sending domain in Resend** (e.g. a subdomain you control) and update
 `RESEND_FROM` to a real address on that domain, or `@duke.edu` magic links will silently
 fail to deliver.
 
-### 3. Deploy the Worker
+### 3. Connect Cloudflare Pages to this repo
 
-```sh
-wrangler deploy
-```
+Dashboard → Workers & Pages → Create → Pages → Connect to Git → select this repo.
+Build command: none. Build output directory: `frontend`. Root directory: `/`.
+`wrangler.toml` at the repo root (with `pages_build_output_dir`) supplies the D1 binding
+and `RESEND_FROM` var automatically on every Git-triggered build — no dashboard binding
+configuration needed.
 
-### 4. Deploy the frontend
-
-Connect this repo to Cloudflare Pages via the dashboard's Git integration. Build output
-directory: `frontend/`. No build command needed (static files).
-
-### 5. Same-origin routing (recommended)
-
-Put the Worker on a route under the same custom domain as Pages (e.g. Pages serves
-`checkin.yourdomain.org/*`, Worker handles `checkin.yourdomain.org/api/*`) so the session
-cookie is first-party. Uncomment and configure the `routes` block in `worker/wrangler.toml`.
-Until a custom domain is set up, the default `*.pages.dev` / `*.workers.dev` URLs work
-fine — the QR payload is a bare token string, not a URL, so domain choice never affects
-QR scan speed or size.
-
-### 6. Seed the roster
+### 4. Seed the roster
 
 ```sh
 python scripts/seed_roster.py roster.csv --remote --apply
@@ -84,16 +77,13 @@ projecting in the conference room.
 ## Local development
 
 ```sh
-# Worker (Miniflare-backed local D1)
-cd worker
 wrangler d1 execute attendance-db --local --file=./schema.sql
-wrangler dev --local
-
-# Frontend
-wrangler pages dev frontend/
+npm run dev   # wrangler pages dev frontend --d1=DB, reads secrets from .dev.vars
 ```
 
-Generate local test QR codes with `QR_SECRET=<same-value> python scripts/generate_qr.py`.
+Create a `.dev.vars` file (gitignored) at the repo root with test values for
+`SESSION_SECRET`, `QR_SECRET`, `RESEND_KEY`, `ADMIN_EXPORT_KEY`. Generate local test QR
+codes with `QR_SECRET=<same-value-as-.dev.vars> python scripts/generate_qr.py`.
 
 ## Dashboard integration
 

@@ -5,6 +5,7 @@ __pycache__/
 .DS_Store
 scripts/_seed_roster.sql
 .env
+.dev.vars
 
 # ~/.gitignore has a blanket *.html rule; this repo's frontend is static HTML
 # and needs these tracked.
