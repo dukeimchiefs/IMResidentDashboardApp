@@ -71,8 +71,9 @@ CSV must have `email` and `name` columns. Re-run any time the roster changes
 
 `.github/workflows/rotate-qr.yml` runs `scripts/generate_qr.py` every morning, committing
 fresh `frontend/assets/qr/qr_noon.png` and `qr_learning.png`. The commit triggers a Pages
-rebuild automatically. `frontend/display.html` shows both current codes side by side for
-projecting in the conference room.
+rebuild automatically. `frontend/display-noon.html` and `frontend/display-learning.html`
+each show one event's current code full-size, for projecting on the screen in that
+event's room.
 
 ## Local development
 
