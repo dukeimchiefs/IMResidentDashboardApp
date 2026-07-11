@@ -1,0 +1,21 @@
+name: Sync attendance to Google Sheet
+
+on:
+  schedule:
+    - cron: '15 * * * *' # hourly, at :15
+  workflow_dispatch: {}
+
+jobs:
+  sync-sheet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install gspread requests
+      - run: python scripts/sync_attendance_sheet.py
+        env:
+          ADMIN_EXPORT_KEY: ${{ secrets.ADMIN_EXPORT_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}

@@ -93,3 +93,38 @@ returns all attendance rows as JSON, including `event_type`
 (`noon_conference` / `learning_session`). This app does not compute or store point
 values — the downstream game dashboard owns scoring and applies its own point weighting
 per event type.
+
+## Google Sheet sync
+
+`.github/workflows/sync-sheet.yml` runs `scripts/sync_attendance_sheet.py` hourly,
+pulling `GET /export` and overwriting an `Attendance` worksheet in a Google Sheet with
+the current full attendance table (name, email, event_type, event_date, timestamp).
+It's a full overwrite each run, not an append — D1 stays the single source of truth and
+the Sheet is just a mirror, so there's no dedup/sync-state logic to get wrong.
+
+One-time setup (Google Cloud Console, done once by a project owner):
+
+1. Create a Google Cloud project (or reuse one) and enable the **Google Sheets API**
+   for it (APIs & Services → Library).
+2. Create a **service account** (APIs & Services → Credentials → Create Credentials →
+   Service Account). No project roles needed — access comes entirely from sharing the
+   Sheet with it in step 4.
+3. On that service account, add a key (Keys tab → Add Key → Create new key → JSON) and
+   download it.
+4. Create the destination Google Sheet, then share it with the service account's email
+   (found in the JSON key, looks like `...@...iam.gserviceaccount.com`) as **Editor**.
+5. Copy the Sheet ID from its URL: `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit`.
+
+Then set these as GitHub Actions repository secrets (Settings → Secrets and variables →
+Actions):
+
+```sh
+gh secret set GOOGLE_SERVICE_ACCOUNT_KEY --repo dukeimchiefs/IMResidentDashboardApp < service-account-key.json
+gh secret set GOOGLE_SHEET_ID --repo dukeimchiefs/IMResidentDashboardApp --body "<sheet id from step 5>"
+```
+
+`ADMIN_EXPORT_KEY` is already set as a GitHub secret (kept in sync with the Pages secret
+of the same name — see above) and reused by this workflow to call `/export`.
+
+Trigger a run immediately with `gh workflow run sync-sheet.yml --repo dukeimchiefs/IMResidentDashboardApp`
+instead of waiting for the next hourly tick.
