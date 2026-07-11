@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+__pycache__/
+*.pyc
+.DS_Store
+scripts/_seed_roster.sql
+.env
+
+# ~/.gitignore has a blanket *.html rule; this repo's frontend is static HTML
+# and needs these tracked.
+!frontend/*.html

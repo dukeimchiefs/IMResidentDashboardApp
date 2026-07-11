@@ -1,0 +1,20 @@
+name = "attendance-worker"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "attendance-db"
+database_id = "b989ffda-3604-4f37-a13d-e1c685848f9c"
+
+[vars]
+# Resend only allows sending from this address until a custom domain is
+# verified in the Resend dashboard — see README for the pre-launch step
+# to switch this to a real @duke.edu-facing sender.
+RESEND_FROM = "onboarding@resend.dev"
+
+# Uncomment and adjust once a custom domain is set up so the session cookie
+# is first-party with the Pages-hosted frontend:
+# routes = [
+#   { pattern = "checkin.yourdomain.org/api/*", zone_name = "yourdomain.org" }
+# ]

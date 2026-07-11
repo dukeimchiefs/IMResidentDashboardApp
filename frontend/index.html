@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Resident Check-In</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="card">
+    <h1>Resident Check-In</h1>
+
+    <div id="login-screen">
+      <input id="email-input" type="email" placeholder="you@duke.edu" autocomplete="email" />
+      <button id="login-button">Send sign-in link</button>
+      <p id="login-message" class="message"></p>
+    </div>
+
+    <div id="scan-screen" class="hidden">
+      <p id="welcome-message"></p>
+      <video id="scan-video" playsinline muted></video>
+      <canvas id="scan-canvas" class="hidden"></canvas>
+      <button id="scan-button">Scan QR Code</button>
+      <p id="scan-message" class="message"></p>
+      <button id="logout-button">Log out</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <script src="scan.js"></script>
+</body>
+</html>

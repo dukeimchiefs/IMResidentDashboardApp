@@ -1,0 +1,25 @@
+name: Rotate daily QR codes
+
+on:
+  schedule:
+    # ~4-5am America/New_York year-round (UTC-5/UTC-4), safely after Eastern
+    # midnight in both DST and standard time, well before any morning conference.
+    - cron: '0 9 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  rotate-qr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install qrcode[pil]
+      - run: python scripts/generate_qr.py
+        env:
+          QR_SECRET: ${{ secrets.QR_SECRET }}
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore: rotate daily QR codes'
+          file_pattern: 'frontend/assets/qr/*.png'
