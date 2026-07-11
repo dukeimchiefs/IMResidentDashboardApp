@@ -7,6 +7,9 @@ on:
     - cron: '0 9 * * *'
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   rotate-qr:
     runs-on: ubuntu-latest
