@@ -8,7 +8,8 @@ database_name = "attendance-db"
 database_id = "b989ffda-3604-4f37-a13d-e1c685848f9c"
 
 [vars]
-# Resend only allows sending from this address until a custom domain is
-# verified in the Resend dashboard — see README for the pre-launch step
-# to switch this to a real @duke.edu-facing sender.
-RESEND_FROM = "onboarding@resend.dev"
+# nicholasbrazeau.com is verified in Resend (DKIM/SPF/DMARC), so sign-in
+# emails send from a real address instead of the onboarding@resend.dev
+# sandbox — this is required for delivery to actual resident @duke.edu
+# inboxes, not just the account owner's own verified address.
+RESEND_FROM = "noreply@nicholasbrazeau.com"

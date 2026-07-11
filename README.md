@@ -50,14 +50,13 @@ original snapshot rather than pulling current secret values. After setting or ch
 any secret above, trigger a new deployment (e.g. `git commit --allow-empty -m "..." &&
 git push`) before testing, or the old value (or no value at all) will still be live.
 
-**Resend sandbox limitation:** until a custom domain is verified in the Resend
-dashboard, Resend only allows sending from `onboarding@resend.dev` (set as `RESEND_FROM`
-in `wrangler.toml`) and only allows delivery **to your own verified Resend account
-email** — not to arbitrary resident inboxes. This is fine for early testing (put your own
-email in the `roster` table to receive test magic links) but **before rostering real
-residents, verify a sending domain in Resend** (e.g. a subdomain you control) and update
-`RESEND_FROM` to a real address on that domain, or `@duke.edu` magic links will silently
-fail to deliver.
+**Sending domain:** `nicholasbrazeau.com` is verified in Resend (DKIM/SPF/DMARC), and
+`RESEND_FROM` in `wrangler.toml` is set to `noreply@nicholasbrazeau.com`. Before that
+verification, Resend only allowed sending from the `onboarding@resend.dev` sandbox
+address and only delivered to the account owner's own verified email — real
+`@duke.edu` roster entries wouldn't have received anything. If this ever needs to move
+to a different domain, re-verify it in Resend first and update `RESEND_FROM` to match,
+or magic links will silently fail to deliver again.
 
 ### 3. Connect Cloudflare Pages to this repo
 
