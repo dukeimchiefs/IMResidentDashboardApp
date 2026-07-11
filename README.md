@@ -34,6 +34,7 @@ wrangler pages secret put SESSION_SECRET   --project-name=imresidentdashboardapp
 wrangler pages secret put QR_SECRET        --project-name=imresidentdashboardapp  # random string, must match the GitHub Actions secret below
 wrangler pages secret put RESEND_KEY       --project-name=imresidentdashboardapp  # Resend API key
 wrangler pages secret put ADMIN_EXPORT_KEY --project-name=imresidentdashboardapp  # random string, protects GET /export
+wrangler pages secret put ADMIN_PASSWORD   --project-name=imresidentdashboardapp  # password gating the /attendance table view
 ```
 
 **`QR_SECRET` must be set to the exact same value in two places** — here (Pages secret)
@@ -83,48 +84,18 @@ npm run dev   # wrangler pages dev frontend --d1=DB, reads secrets from .dev.var
 ```
 
 Create a `.dev.vars` file (gitignored) at the repo root with test values for
-`SESSION_SECRET`, `QR_SECRET`, `RESEND_KEY`, `ADMIN_EXPORT_KEY`. Generate local test QR
-codes with `QR_SECRET=<same-value-as-.dev.vars> python scripts/generate_qr.py`.
+`SESSION_SECRET`, `QR_SECRET`, `RESEND_KEY`, `ADMIN_EXPORT_KEY`, `ADMIN_PASSWORD`.
+Generate local test QR codes with
+`QR_SECRET=<same-value-as-.dev.vars> python scripts/generate_qr.py`.
 
-## Dashboard integration
+## Viewing attendance
+
+**`GET /attendance`** is a password-gated page (separate from resident sign-in) showing
+a simple table of date, resident name, and event. Enter the `ADMIN_PASSWORD` secret once;
+it sets a 7-day cookie so you don't have to re-enter it every visit.
 
 `GET /export` (header `X-Admin-Key: <ADMIN_EXPORT_KEY>`, optional `?since=YYYY-MM-DD`)
 returns all attendance rows as JSON, including `event_type`
 (`noon_conference` / `learning_session`). This app does not compute or store point
 values — the downstream game dashboard owns scoring and applies its own point weighting
 per event type.
-
-## Google Sheet sync
-
-`.github/workflows/sync-sheet.yml` runs `scripts/sync_attendance_sheet.py` hourly,
-pulling `GET /export` and overwriting an `Attendance` worksheet in a Google Sheet with
-the current full attendance table (name, email, event_type, event_date, timestamp).
-It's a full overwrite each run, not an append — D1 stays the single source of truth and
-the Sheet is just a mirror, so there's no dedup/sync-state logic to get wrong.
-
-One-time setup (Google Cloud Console, done once by a project owner):
-
-1. Create a Google Cloud project (or reuse one) and enable the **Google Sheets API**
-   for it (APIs & Services → Library).
-2. Create a **service account** (APIs & Services → Credentials → Create Credentials →
-   Service Account). No project roles needed — access comes entirely from sharing the
-   Sheet with it in step 4.
-3. On that service account, add a key (Keys tab → Add Key → Create new key → JSON) and
-   download it.
-4. Create the destination Google Sheet, then share it with the service account's email
-   (found in the JSON key, looks like `...@...iam.gserviceaccount.com`) as **Editor**.
-5. Copy the Sheet ID from its URL: `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit`.
-
-Then set these as GitHub Actions repository secrets (Settings → Secrets and variables →
-Actions):
-
-```sh
-gh secret set GOOGLE_SERVICE_ACCOUNT_KEY --repo dukeimchiefs/IMResidentDashboardApp < service-account-key.json
-gh secret set GOOGLE_SHEET_ID --repo dukeimchiefs/IMResidentDashboardApp --body "<sheet id from step 5>"
-```
-
-`ADMIN_EXPORT_KEY` is already set as a GitHub secret (kept in sync with the Pages secret
-of the same name — see above) and reused by this workflow to call `/export`.
-
-Trigger a run immediately with `gh workflow run sync-sheet.yml --repo dukeimchiefs/IMResidentDashboardApp`
-instead of waiting for the next hourly tick.
