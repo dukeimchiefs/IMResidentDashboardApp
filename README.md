@@ -42,6 +42,14 @@ and as a GitHub Actions repository secret (Settings → Secrets and variables �
 `QR_SECRET`). There is no automatic sync between the two. If you ever rotate this secret,
 update both or QR validation will silently break.
 
+**Pages secrets need a fresh deployment to take effect.** Each Pages deployment is an
+immutable snapshot that binds whatever secrets existed *at build time* — running
+`wrangler pages secret put` updates the project config but does **not** retroactively
+apply to the currently-live deployment, and retrying an old deployment reuses its
+original snapshot rather than pulling current secret values. After setting or changing
+any secret above, trigger a new deployment (e.g. `git commit --allow-empty -m "..." &&
+git push`) before testing, or the old value (or no value at all) will still be live.
+
 **Resend sandbox limitation:** until a custom domain is verified in the Resend
 dashboard, Resend only allows sending from `onboarding@resend.dev` (set as `RESEND_FROM`
 in `wrangler.toml`) and only allows delivery **to your own verified Resend account
