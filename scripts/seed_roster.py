@@ -9,14 +9,35 @@ SQL_OUT_PATH = os.path.join(os.path.dirname(__file__), "_seed_roster.sql")
 
 def build_sql(csv_path: str) -> str:
     statements = []
-    with open(csv_path, newline="") as f:
+    skipped = []
+    # utf-8-sig quietly strips a leading BOM if present (common in
+    # Excel-exported CSVs) instead of leaving it stuck to the first header name.
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
+        # Column names are matched case-insensitively so "Name"/"Email" and
+        # "name"/"email" headers both work without editing the source file.
+        lower_fieldnames = {name.lower(): name for name in reader.fieldnames}
+        email_col = lower_fieldnames.get("email")
+        name_col = lower_fieldnames.get("name")
+        if not email_col or not name_col:
+            raise ValueError(f"CSV must have 'email' and 'name' columns, found: {reader.fieldnames}")
+
         for row in reader:
-            email = row["email"].strip().lower().replace("'", "''")
-            name = row["name"].strip().replace("'", "''")
+            raw_email = row[email_col].strip()
+            name = row[name_col].strip().replace("'", "''")
+            if "@" not in raw_email:
+                skipped.append((name, raw_email))
+                continue
+            email = raw_email.lower().replace("'", "''")
             statements.append(
                 f"INSERT OR REPLACE INTO roster (email, name) VALUES ('{email}', '{name}');"
             )
+
+    if skipped:
+        print(f"Skipping {len(skipped)} row(s) without a valid email:")
+        for name, raw_email in skipped:
+            print(f"  - {name}: {raw_email!r}")
+
     return "\n".join(statements) + "\n"
 
 
