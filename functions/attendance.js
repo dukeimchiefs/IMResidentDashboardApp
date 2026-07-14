@@ -3,14 +3,14 @@ import { exportAttendance } from './_lib/db.js';
 import { dbValueToLabel } from './_lib/eventTypes.js';
 import { html } from './_lib/http.js';
 
-const PAGE_STYLE = `body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:2rem;background:#f5f5f7;color:#1c1c1e}
-h1{font-size:1.25rem}
+const PAGE_STYLE = `body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:2rem;background:#f3f2f1;color:#262626}
+h1{font-size:1.25rem;color:#012169}
 table{border-collapse:collapse;width:100%;max-width:640px;background:#fff;border-radius:8px;overflow:hidden}
 th,td{text-align:left;padding:0.5rem 1rem;border-bottom:1px solid #e5e5ea}
-th{background:#f0f0f2}
+th{background:#e2e6ed}
 .login-card{max-width:320px;margin:4rem auto;text-align:center}
-input[type=password]{width:100%;padding:0.75rem;font-size:1rem;border:1px solid #c7c7cc;border-radius:8px;margin-bottom:1rem;box-sizing:border-box}
-button{padding:0.75rem 1.5rem;font-size:1rem;border:none;border-radius:8px;background:#0071e3;color:#fff;cursor:pointer}
+input[type=password]{width:100%;padding:0.75rem;font-size:1rem;border:1px solid #e5e5e5;border-radius:8px;margin-bottom:1rem;box-sizing:border-box}
+button{padding:0.75rem 1.5rem;font-size:1rem;border:none;border-radius:8px;background:#00539b;color:#fff;cursor:pointer}
 .error{color:#c62828}`;
 
 function escapeHtml(str) {
