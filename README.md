@@ -1,9 +1,10 @@
 # Resident Attendance Check-In App
 
-QR-code-based conference check-in for residents. Two independent daily-rotating QR
-codes — **Noon Conference** and **Learning Session** — each verified server-side via
-HMAC, with identity confirmed through an email magic link matched against a preloaded
-roster. See `Claude.md` for the original design spec and rationale.
+QR-code-based conference check-in for residents. Three independent, server-side-verified
+HMAC QR codes — **Noon Conference** and **Learning Session** (daily) and **Medicine Grand
+Rounds** (weekly, Fridays only) — with identity confirmed through an email magic link
+matched against a preloaded roster. See `Claude.md` for the original design spec and
+rationale.
 
 ## Stack
 
@@ -26,6 +27,11 @@ wrangler d1 create attendance-db
 # copy the returned database_id into wrangler.toml
 wrangler d1 execute attendance-db --remote --file=./schema.sql
 ```
+
+`schema.sql` only applies cleanly to a fresh database. If `attendance.event_type`'s CHECK
+constraint changes on an already-deployed database (e.g. adding a new event type), SQLite
+can't alter a CHECK constraint in place — run the matching one-off `migrate_*.sql` script
+instead (e.g. `wrangler d1 execute attendance-db --remote --file=./migrate_add_grand_rounds.sql`).
 
 ### 2. Pages project secrets
 
@@ -75,13 +81,19 @@ python scripts/seed_roster.py roster.csv --remote --apply
 CSV must have `email` and `name` columns. Re-run any time the roster changes
 (`INSERT OR REPLACE`, so it's safe to re-run with an updated file).
 
-## Daily QR rotation
+## QR rotation
 
-`.github/workflows/rotate-qr.yml` runs `scripts/generate_qr.py` every morning, committing
-fresh `frontend/assets/qr/qr_noon.png` and `qr_learning.png`. The commit triggers a Pages
-rebuild automatically. `frontend/display-noon.html` and `frontend/display-learning.html`
-each show one event's current code full-size, for projecting on the screen in that
-event's room.
+`.github/workflows/rotate-qr.yml` runs `scripts/generate_qr.py noon learning` every
+morning, committing fresh `frontend/assets/qr/qr_noon.png` and `qr_learning.png`.
+
+`.github/workflows/rotate-grand-rounds-qr.yml` runs `scripts/generate_qr.py grandrounds`
+every Friday morning (~4-5am America/New_York, same UTC-anchored cron approach as the
+daily job), committing fresh `frontend/assets/qr/qr_grandrounds.png` — Grand Rounds only
+happens on Fridays, so this code doesn't need to rotate daily.
+
+Either commit triggers a Pages rebuild automatically. `frontend/display-noon.html`,
+`frontend/display-learning.html`, and `frontend/display-grandrounds.html` each show one
+event's current code full-size, for projecting on the screen in that event's room.
 
 ## Local development
 
@@ -103,6 +115,6 @@ it sets a 7-day cookie so you don't have to re-enter it every visit.
 
 `GET /export` (header `X-Admin-Key: <ADMIN_EXPORT_KEY>`, optional `?since=YYYY-MM-DD`)
 returns all attendance rows as JSON, including `event_type`
-(`noon_conference` / `learning_session`). This app does not compute or store point
-values — the downstream game dashboard owns scoring and applies its own point weighting
-per event type.
+(`noon_conference` / `learning_session` / `grand_rounds`). This app does not compute or
+store point values — the downstream game dashboard owns scoring and applies its own point
+weighting per event type.

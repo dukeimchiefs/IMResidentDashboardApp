@@ -19,10 +19,10 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install qrcode[pil]
-      - run: python scripts/generate_qr.py
+      - run: python scripts/generate_qr.py noon learning
         env:
           QR_SECRET: ${{ secrets.QR_SECRET }}
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: 'chore: rotate daily QR codes'
-          file_pattern: 'frontend/assets/qr/*.png'
+          file_pattern: 'frontend/assets/qr/qr_noon.png frontend/assets/qr/qr_learning.png'

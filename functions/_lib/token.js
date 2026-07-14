@@ -25,7 +25,7 @@ async function hmacHex(secret, message) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// eventType is the short QR-prefix form: 'noon' | 'learning'
+// eventType is the short QR-prefix form: 'noon' | 'learning' | 'grandrounds'
 export async function computeDailyToken(secret, dateStr, eventType) {
   const full = await hmacHex(secret, `${dateStr}:${eventType}`);
   return full.slice(0, TOKEN_HEX_LENGTH);
@@ -49,7 +49,7 @@ function timingSafeEqualStr(a, b) {
   return diff === 0;
 }
 
-// Returns { valid: boolean, type?: 'noon'|'learning' }
+// Returns { valid: boolean, type?: 'noon'|'learning'|'grandrounds' }
 export async function validateScannedPayload(secret, payload, dateStr = todayET()) {
   const parsed = parsePayload(payload);
   if (!parsed) return { valid: false };

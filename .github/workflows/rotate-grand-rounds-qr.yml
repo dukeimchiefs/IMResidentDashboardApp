@@ -1,0 +1,29 @@
+name: Rotate Grand Rounds QR code
+
+on:
+  schedule:
+    # ~4-5am America/New_York on Fridays (UTC-5/UTC-4), same anchor logic as
+    # rotate-qr.yml — Grand Rounds only happens on Fridays, so this only needs
+    # to run weekly instead of daily.
+    - cron: '0 9 * * 5'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  rotate-qr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install qrcode[pil]
+      - run: python scripts/generate_qr.py grandrounds
+        env:
+          QR_SECRET: ${{ secrets.QR_SECRET }}
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore: rotate Grand Rounds QR code'
+          file_pattern: 'frontend/assets/qr/qr_grandrounds.png'
