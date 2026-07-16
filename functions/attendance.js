@@ -1,5 +1,5 @@
 import { verifyAdminSession, createAdminCookie, timingSafeEqualStr } from './_lib/auth.js';
-import { exportAttendance, getRecentLoginRejections } from './_lib/db.js';
+import { exportAttendance, getRecentLoginRejections, countPendingLogins } from './_lib/db.js';
 import { dbValueToLabel } from './_lib/eventTypes.js';
 import { html } from './_lib/http.js';
 import { checkFixedWindow } from './_lib/rateLimit.js';
@@ -39,7 +39,7 @@ function passwordFormPage(error) {
 </html>`;
 }
 
-function attendanceTablePage(rows, rejections) {
+function attendanceTablePage(rows, rejections, pendingCount) {
   const body = rows
     .map((r) => `<tr><td>${escapeHtml(r.event_date)}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(dbValueToLabel(r.event_type))}</td></tr>`)
     .join('');
@@ -61,6 +61,10 @@ function attendanceTablePage(rows, rejections) {
     <thead><tr><th>When</th><th>Email</th><th>IP</th></tr></thead>
     <tbody>${rejectionBody}</tbody>
   </table>
+
+  <h2>Emails queued for retry (${pendingCount})</h2>
+  <p>Sign-in emails that hit the Resend daily cap or failed to send — a scheduled
+  Worker retries these every 15 minutes.</p>
 </body>
 </html>`;
 }
@@ -74,7 +78,8 @@ export async function onRequestGet({ request, env }) {
     (a, b) => b.event_date.localeCompare(a.event_date) || a.name.localeCompare(b.name)
   );
   const { results: rejections } = await getRecentLoginRejections(env.DB);
-  return html(attendanceTablePage(sorted, rejections));
+  const pendingCount = await countPendingLogins(env.DB);
+  return html(attendanceTablePage(sorted, rejections, pendingCount));
 }
 
 export async function onRequestPost({ request, env }) {

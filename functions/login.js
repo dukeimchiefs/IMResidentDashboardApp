@@ -1,40 +1,13 @@
-import { getRosterEntry, insertMagicLink, insertLoginRejection } from './_lib/db.js';
+import { getRosterEntry, insertMagicLink, insertLoginRejection, enqueuePendingLogin } from './_lib/db.js';
 import { generateRandomToken, magicLinkExpiry } from './_lib/auth.js';
 import { json } from './_lib/http.js';
+import { sendMagicLinkEmail } from './_lib/resend.js';
 import { checkFixedWindow, checkCooldown, peekDailyCounter, incrementDailyCounter } from './_lib/rateLimit.js';
 
 const IP_LIMIT = 10;
 const IP_WINDOW_SECONDS = 600; // 10 requests / 10 minutes per IP
 const EMAIL_COOLDOWN_SECONDS = 60; // 1 send / minute per roster email
 const RESEND_DAILY_SOFT_CAP = 90; // stay under Resend free tier's 100/day hard cap
-
-async function sendMagicLinkEmail(env, email, verifyUrl) {
-  const body = JSON.stringify({
-    from: env.RESEND_FROM || 'onboarding@resend.dev',
-    to: email,
-    subject: 'Your sign-in link',
-    html: `<p>Click to sign in: <a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 15 minutes.</p>`,
-  });
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.RESEND_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body,
-      });
-      if (res.ok) return true;
-      console.error('resend_send_failed', res.status, await res.text().catch(() => ''));
-    } catch (err) {
-      console.error('resend_send_threw', err);
-    }
-    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-  return false;
-}
 
 export async function onRequestPost({ request, env }) {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
@@ -63,10 +36,12 @@ export async function onRequestPost({ request, env }) {
 
   const sentToday = await peekDailyCounter(env.RATE_LIMIT, 'rl:login:resend_daily');
   if (sentToday >= RESEND_DAILY_SOFT_CAP) {
-    return json(
-      { ok: false, error: 'high_demand', message: 'High demand right now — please try again in a few minutes.' },
-      503
-    );
+    await enqueuePendingLogin(env.DB, rosterEntry.email, ip, 'high_demand');
+    return json({
+      ok: true,
+      queued: true,
+      message: "High demand right now — we'll email your sign-in link automatically as soon as we can. No need to try again.",
+    });
   }
 
   const allowedToSend = await checkCooldown(env.RATE_LIMIT, 'rl:login:email', rosterEntry.email, EMAIL_COOLDOWN_SECONDS);
@@ -83,10 +58,12 @@ export async function onRequestPost({ request, env }) {
 
   const sent = await sendMagicLinkEmail(env, rosterEntry.email, verifyUrl.toString());
   if (!sent) {
-    return json(
-      { ok: false, error: 'email_failed', message: 'Something went wrong sending your email. Please try again in a minute.' },
-      502
-    );
+    await enqueuePendingLogin(env.DB, rosterEntry.email, ip, 'email_failed');
+    return json({
+      ok: true,
+      queued: true,
+      message: "We're having trouble sending right now — you'll get an email automatically once it goes through.",
+    });
   }
   await incrementDailyCounter(env.RATE_LIMIT, 'rl:login:resend_daily');
 

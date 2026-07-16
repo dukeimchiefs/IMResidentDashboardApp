@@ -56,6 +56,41 @@ export async function getRecentLoginRejections(db, limit = 50) {
     .all();
 }
 
+// Retry queue for magic-link sends that hit the Resend daily cap or failed
+// outright (drained by the separate scheduled retry-worker). UNIQUE(email)
+// means re-triggering an already-queued email is a no-op, not a duplicate row.
+export async function enqueuePendingLogin(db, email, ip, reason) {
+  await db
+    .prepare(
+      'INSERT OR IGNORE INTO pending_login_emails (email, ip, reason, attempts, created_at) VALUES (?, ?, ?, 0, ?)'
+    )
+    .bind(email, ip, reason, new Date().toISOString())
+    .run();
+}
+
+export async function getPendingLogins(db, limit) {
+  return db
+    .prepare('SELECT id, email, attempts FROM pending_login_emails ORDER BY created_at ASC LIMIT ?')
+    .bind(limit)
+    .all();
+}
+
+export async function countPendingLogins(db) {
+  const row = await db.prepare('SELECT COUNT(*) AS count FROM pending_login_emails').first();
+  return row ? row.count : 0;
+}
+
+export async function markPendingLoginAttempt(db, id) {
+  await db
+    .prepare('UPDATE pending_login_emails SET attempts = attempts + 1, last_attempt_at = ? WHERE id = ?')
+    .bind(new Date().toISOString(), id)
+    .run();
+}
+
+export async function deletePendingLogin(db, id) {
+  await db.prepare('DELETE FROM pending_login_emails WHERE id = ?').bind(id).run();
+}
+
 export async function exportAttendance(db, since) {
   if (since) {
     return db

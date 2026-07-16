@@ -32,8 +32,9 @@ wrangler d1 execute attendance-db --remote --file=./schema.sql
 constraint changes on an already-deployed database (e.g. adding a new event type), SQLite
 can't alter a CHECK constraint in place — run the matching one-off `migrate_*.sql` script
 instead (e.g. `wrangler d1 execute attendance-db --remote --file=./migrate_add_grand_rounds.sql`).
-If you deployed before the `login_rejections` table was added, apply
-`migrate_add_login_rejections.sql` the same way.
+If you deployed before the `login_rejections` or `pending_login_emails` tables were
+added, apply `migrate_add_login_rejections.sql` and `migrate_add_pending_login_emails.sql`
+the same way.
 
 ### 1b. Rate limiting KV namespace
 
@@ -77,11 +78,37 @@ or magic links will silently fail to deliver again.
 
 **Free-tier daily cap:** Resend's free plan caps sends at 100/day (3,000/month). If the
 whole residency (~170 people) tries to sign in the same day, some sends will hit that
-cap. `functions/login.js` tracks a same-day send counter in KV and stops calling Resend
-once it's within 10 of the cap, returning a "high demand, try again shortly" message
-instead of silently dropping the email — this avoids a hard failure but doesn't increase
-real capacity. If launch-day volume is a concern, upgrading the Resend plan removes the
-cap entirely.
+cap. `functions/login.js` tracks a same-day send counter in KV and, once within 10 of
+the cap (or if a send fails outright), queues the email in the `pending_login_emails`
+D1 table instead of dropping it — the resident sees "we'll email you automatically,
+no need to retry." The separate `retry-worker/` Worker (see below) drains that queue
+every 15 minutes, generating a fresh magic-link token per attempt (the original 15-minute
+link would otherwise expire before a delayed retry could use it) and respecting the same
+shared daily-cap counter. This doesn't create Resend capacity that doesn't exist — a
+genuine 170-in-one-day burst still spreads deliveries across as many days as it takes to
+clear the queue at ~90/day — but no sign-in request is silently lost, and residents don't
+have to remember to retry themselves. If same-day delivery for everyone matters (e.g.
+launch day), upgrading the Resend plan removes the cap entirely instead.
+
+### 1c. Retry-queue Worker (`retry-worker/`)
+
+Cloudflare Pages Functions can't run Cron Triggers, so the scheduled retry queue lives
+in its own standalone Worker, sharing the same D1 database and `RATE_LIMIT` KV namespace
+as the Pages project.
+
+```sh
+cd retry-worker
+wrangler secret put RESEND_KEY   # same Resend API key as the Pages project's secret
+wrangler deploy
+```
+
+If a custom domain ever replaces `imresidentdashboardapp.pages.dev`, update `APP_URL` in
+`retry-worker/wrangler.toml` and redeploy — a scheduled handler has no incoming request
+to derive the base URL from, unlike `functions/login.js`.
+
+Redeploy this Worker (`wrangler deploy` from `retry-worker/`) any time `src/index.js` or
+the shared `functions/_lib/*` modules it imports change — it does **not** get redeployed
+by the Pages project's git-triggered builds.
 
 ### 3. Connect Cloudflare Pages to this repo
 

@@ -1,0 +1,24 @@
+name = "imresidentdashboardapp-retry"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+# Cloudflare Pages Functions cannot run Cron Triggers — scheduled execution
+# requires a standalone Worker, hence this separate deployable. It shares the
+# same D1 database and KV namespace as the main Pages project.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "attendance-db"
+database_id = "b989ffda-3604-4f37-a13d-e1c685848f9c"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "4ef044e29836413e8af33f103bef6adc"
+
+[vars]
+RESEND_FROM = "noreply@nicholasbrazeau.com"
+# Base URL used to build /verify links since a scheduled handler has no
+# incoming request to derive it from. Update if a custom domain is added.
+APP_URL = "https://imresidentdashboardapp.pages.dev"
