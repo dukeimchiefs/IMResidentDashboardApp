@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler pages dev frontend --d1=DB",
+    "dev": "wrangler pages dev frontend",
     "deploy": "wrangler pages deploy frontend"
   },
   "devDependencies": {

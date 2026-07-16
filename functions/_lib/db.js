@@ -42,6 +42,20 @@ export async function insertAttendance(db, { name, email, eventType, eventDate, 
   }
 }
 
+export async function insertLoginRejection(db, email, ip) {
+  await db
+    .prepare('INSERT INTO login_rejections (email, ip, timestamp) VALUES (?, ?, ?)')
+    .bind(email, ip, new Date().toISOString())
+    .run();
+}
+
+export async function getRecentLoginRejections(db, limit = 50) {
+  return db
+    .prepare('SELECT email, ip, timestamp FROM login_rejections ORDER BY timestamp DESC LIMIT ?')
+    .bind(limit)
+    .all();
+}
+
 export async function exportAttendance(db, since) {
   if (since) {
     return db

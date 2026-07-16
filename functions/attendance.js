@@ -1,10 +1,15 @@
 import { verifyAdminSession, createAdminCookie, timingSafeEqualStr } from './_lib/auth.js';
-import { exportAttendance } from './_lib/db.js';
+import { exportAttendance, getRecentLoginRejections } from './_lib/db.js';
 import { dbValueToLabel } from './_lib/eventTypes.js';
 import { html } from './_lib/http.js';
+import { checkFixedWindow } from './_lib/rateLimit.js';
+
+const IP_LIMIT = 10;
+const IP_WINDOW_SECONDS = 600; // 10 attempts / 10 minutes per IP
 
 const PAGE_STYLE = `body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:2rem;background:#f3f2f1;color:#262626}
 h1{font-size:1.25rem;color:#012169}
+h2{font-size:1rem;color:#012169;margin-top:2.5rem}
 table{border-collapse:collapse;width:100%;max-width:640px;background:#fff;border-radius:8px;overflow:hidden}
 th,td{text-align:left;padding:0.5rem 1rem;border-bottom:1px solid #e5e5ea}
 th{background:#e2e6ed}
@@ -34,9 +39,12 @@ function passwordFormPage(error) {
 </html>`;
 }
 
-function attendanceTablePage(rows) {
+function attendanceTablePage(rows, rejections) {
   const body = rows
     .map((r) => `<tr><td>${escapeHtml(r.event_date)}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(dbValueToLabel(r.event_type))}</td></tr>`)
+    .join('');
+  const rejectionBody = rejections
+    .map((r) => `<tr><td>${escapeHtml(r.timestamp)}</td><td>${escapeHtml(r.email)}</td><td>${escapeHtml(r.ip || '')}</td></tr>`)
     .join('');
   return `<!doctype html>
 <html>
@@ -47,22 +55,35 @@ function attendanceTablePage(rows) {
     <thead><tr><th>Date</th><th>Name</th><th>Event</th></tr></thead>
     <tbody>${body}</tbody>
   </table>
+
+  <h2>Recent sign-in attempts not on roster (${rejections.length})</h2>
+  <table>
+    <thead><tr><th>When</th><th>Email</th><th>IP</th></tr></thead>
+    <tbody>${rejectionBody}</tbody>
+  </table>
 </body>
 </html>`;
 }
 
 export async function onRequestGet({ request, env }) {
-  const authed = await verifyAdminSession(env.SESSION_SECRET, request);
+  const authed = await verifyAdminSession(env.ADMIN_SESSION_SECRET, request);
   if (!authed) return html(passwordFormPage());
 
   const { results } = await exportAttendance(env.DB);
   const sorted = [...results].sort(
     (a, b) => b.event_date.localeCompare(a.event_date) || a.name.localeCompare(b.name)
   );
-  return html(attendanceTablePage(sorted));
+  const { results: rejections } = await getRecentLoginRejections(env.DB);
+  return html(attendanceTablePage(sorted, rejections));
 }
 
 export async function onRequestPost({ request, env }) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const ipOk = await checkFixedWindow(env.RATE_LIMIT, 'rl:attendance:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
+  if (!ipOk) {
+    return html(passwordFormPage('Too many attempts. Please wait a few minutes and try again.'), 429);
+  }
+
   const formData = await request.formData();
   const password = formData.get('password') || '';
 
@@ -70,6 +91,6 @@ export async function onRequestPost({ request, env }) {
     return html(passwordFormPage('Incorrect password.'), 401);
   }
 
-  const cookie = await createAdminCookie(env.SESSION_SECRET);
+  const cookie = await createAdminCookie(env.ADMIN_SESSION_SECRET);
   return new Response(null, { status: 302, headers: { Location: '/attendance', 'Set-Cookie': cookie } });
 }

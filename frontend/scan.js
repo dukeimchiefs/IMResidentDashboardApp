@@ -38,13 +38,18 @@ loginButton.addEventListener('click', async () => {
   if (!email) return;
   loginButton.disabled = true;
   try {
-    await fetch(`${API_BASE}/login`, {
+    const res = await fetch(`${API_BASE}/login`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
-    setMessage(loginMessage, 'Check your email for a sign-in link.', 'success');
+    const data = await res.json().catch(() => ({}));
+    if (data.ok) {
+      setMessage(loginMessage, 'Check your email for a sign-in link.', 'success');
+    } else {
+      setMessage(loginMessage, data.message || 'Something went wrong. Try again.', 'error');
+    }
   } catch {
     setMessage(loginMessage, 'Something went wrong. Try again.', 'error');
   } finally {

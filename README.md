@@ -32,15 +32,26 @@ wrangler d1 execute attendance-db --remote --file=./schema.sql
 constraint changes on an already-deployed database (e.g. adding a new event type), SQLite
 can't alter a CHECK constraint in place — run the matching one-off `migrate_*.sql` script
 instead (e.g. `wrangler d1 execute attendance-db --remote --file=./migrate_add_grand_rounds.sql`).
+If you deployed before the `login_rejections` table was added, apply
+`migrate_add_login_rejections.sql` the same way.
+
+### 1b. Rate limiting KV namespace
+
+`/login`, `/attendance`, and `/export` are throttled using a Cloudflare KV namespace
+(`RATE_LIMIT` binding, already configured in `wrangler.toml` with a live namespace ID).
+No further setup needed unless you're forking this into a new Cloudflare account, in
+which case run `wrangler kv namespace create RATE_LIMIT` and update the `id` in
+`wrangler.toml`.
 
 ### 2. Pages project secrets
 
 ```sh
-wrangler pages secret put SESSION_SECRET   --project-name=imresidentdashboardapp  # random string, signs session cookies
-wrangler pages secret put QR_SECRET        --project-name=imresidentdashboardapp  # random string, must match the GitHub Actions secret below
-wrangler pages secret put RESEND_KEY       --project-name=imresidentdashboardapp  # Resend API key
-wrangler pages secret put ADMIN_EXPORT_KEY --project-name=imresidentdashboardapp  # random string, protects GET /export
-wrangler pages secret put ADMIN_PASSWORD   --project-name=imresidentdashboardapp  # password gating the /attendance table view
+wrangler pages secret put SESSION_SECRET       --project-name=imresidentdashboardapp  # random string, signs resident session cookies
+wrangler pages secret put ADMIN_SESSION_SECRET --project-name=imresidentdashboardapp  # random string, signs the admin (/attendance) cookie — must differ from SESSION_SECRET
+wrangler pages secret put QR_SECRET            --project-name=imresidentdashboardapp  # random string, must match the GitHub Actions secret below
+wrangler pages secret put RESEND_KEY           --project-name=imresidentdashboardapp  # Resend API key
+wrangler pages secret put ADMIN_EXPORT_KEY     --project-name=imresidentdashboardapp  # random string, protects GET /export
+wrangler pages secret put ADMIN_PASSWORD       --project-name=imresidentdashboardapp  # password gating the /attendance table view
 ```
 
 **`QR_SECRET` must be set to the exact same value in two places** — here (Pages secret)
@@ -63,6 +74,14 @@ address and only delivered to the account owner's own verified email — real
 `@duke.edu` roster entries wouldn't have received anything. If this ever needs to move
 to a different domain, re-verify it in Resend first and update `RESEND_FROM` to match,
 or magic links will silently fail to deliver again.
+
+**Free-tier daily cap:** Resend's free plan caps sends at 100/day (3,000/month). If the
+whole residency (~170 people) tries to sign in the same day, some sends will hit that
+cap. `functions/login.js` tracks a same-day send counter in KV and stops calling Resend
+once it's within 10 of the cap, returning a "high demand, try again shortly" message
+instead of silently dropping the email — this avoids a hard failure but doesn't increase
+real capacity. If launch-day volume is a concern, upgrading the Resend plan removes the
+cap entirely.
 
 ### 3. Connect Cloudflare Pages to this repo
 
@@ -99,19 +118,25 @@ event's current code full-size, for projecting on the screen in that event's roo
 
 ```sh
 wrangler d1 execute attendance-db --local --file=./schema.sql
-npm run dev   # wrangler pages dev frontend --d1=DB, reads secrets from .dev.vars
+npm run dev   # wrangler pages dev frontend — D1 and KV bindings auto-detected from
+              # wrangler.toml, secrets read from .dev.vars
 ```
 
 Create a `.dev.vars` file (gitignored) at the repo root with test values for
-`SESSION_SECRET`, `QR_SECRET`, `RESEND_KEY`, `ADMIN_EXPORT_KEY`, `ADMIN_PASSWORD`.
-Generate local test QR codes with
+`SESSION_SECRET`, `ADMIN_SESSION_SECRET`, `QR_SECRET`, `RESEND_KEY`, `ADMIN_EXPORT_KEY`,
+`ADMIN_PASSWORD`. Generate local test QR codes with
 `QR_SECRET=<same-value-as-.dev.vars> python scripts/generate_qr.py`.
 
 ## Viewing attendance
 
 **`GET /attendance`** is a password-gated page (separate from resident sign-in) showing
 a simple table of date, resident name, and event. Enter the `ADMIN_PASSWORD` secret once;
-it sets a 7-day cookie so you don't have to re-enter it every visit.
+it sets a 7-day cookie so you don't have to re-enter it every visit. The same page also
+lists recent `/login` attempts for emails **not** found in the roster (typos, rotated-out
+residents, or probing) — the resident-facing response is always the same generic "check
+your email" message regardless of roster membership (to avoid roster-enumeration), so
+this admin-only log is the way to notice a legitimate resident whose email isn't seeded
+yet.
 
 `GET /export` (header `X-Admin-Key: <ADMIN_EXPORT_KEY>`, optional `?since=YYYY-MM-DD`)
 returns all attendance rows as JSON, including `event_type`
