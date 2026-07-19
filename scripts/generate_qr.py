@@ -14,6 +14,12 @@ OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "assets",
 # means updating both.
 EVENT_TYPES = ["noon", "learning", "grandrounds"]
 
+# Event types whose QR is a single static image valid across a multi-day window
+# instead of rotating daily. Must mirror MULTI_DAY_WINDOWS in functions/_lib/eventTypes.js.
+MULTI_DAY_WINDOWS = {
+    "welcome": {"anchor_date": "2026-07-17", "valid_days": 7},
+}
+
 TOKEN_HEX_LENGTH = 16  # must match TOKEN_HEX_LENGTH in functions/_lib/token.js
 
 
@@ -35,7 +41,9 @@ def main():
     # weekly-only event's QR isn't needlessly regenerated and committed every day.
     types_to_generate = sys.argv[1:] or EVENT_TYPES
     for event_type in types_to_generate:
-        token = compute_token(date_str, event_type)
+        window = MULTI_DAY_WINDOWS.get(event_type)
+        token_date = window["anchor_date"] if window else date_str
+        token = compute_token(token_date, event_type)
         payload = f"{event_type}:{token}"
         img = qrcode.make(payload)
         # Fixed filenames, overwritten on each run — a stale QR simply stops matching

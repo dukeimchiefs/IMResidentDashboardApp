@@ -1,4 +1,4 @@
-import { QR_PREFIXES } from './eventTypes.js';
+import { QR_PREFIXES, MULTI_DAY_WINDOWS } from './eventTypes.js';
 
 const TOKEN_HEX_LENGTH = 16; // 16 hex chars = 8 bytes = 64 bits, plenty vs. guessing within a single day
 
@@ -49,11 +49,25 @@ function timingSafeEqualStr(a, b) {
   return diff === 0;
 }
 
-// Returns { valid: boolean, type?: 'noon'|'learning'|'grandrounds' }
+function addDaysToDateStr(dateStr, days) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Returns { valid: boolean, type?: 'noon'|'learning'|'grandrounds'|'welcome' }
 export async function validateScannedPayload(secret, payload, dateStr = todayET()) {
   const parsed = parsePayload(payload);
   if (!parsed) return { valid: false };
-  const expected = await computeDailyToken(secret, dateStr, parsed.type);
+
+  const window = MULTI_DAY_WINDOWS[parsed.type];
+  if (window) {
+    const windowEnd = addDaysToDateStr(window.anchorDate, window.validDays);
+    if (dateStr < window.anchorDate || dateStr >= windowEnd) return { valid: false };
+  }
+  const tokenDate = window ? window.anchorDate : dateStr;
+
+  const expected = await computeDailyToken(secret, tokenDate, parsed.type);
   const valid = timingSafeEqualStr(expected, parsed.token);
   return valid ? { valid: true, type: parsed.type } : { valid: false };
 }
