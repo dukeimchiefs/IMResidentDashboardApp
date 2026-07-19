@@ -54,12 +54,11 @@ export async function onRequestPost({ request, env }) {
   const sentToday = await peekDailyCounter(env.RATE_LIMIT, 'rl:login:resend_daily');
   if (sentToday >= RESEND_DAILY_SOFT_CAP) {
     await enqueuePendingLogin(env.DB, rosterEntry.email, ip, 'high_demand');
+    // Body must be identical to the not-on-roster response below — any
+    // roster-membership-dependent difference here re-opens the enumeration
+    // oracle that padResponse()/MIN_RESPONSE_MS was added to close on timing.
     await padResponse(startTime);
-    return json({
-      ok: true,
-      queued: true,
-      message: "High demand right now — we'll email your sign-in link automatically as soon as we can. No need to try again.",
-    });
+    return json({ ok: true });
   }
 
   const allowedToSend = await checkCooldown(env.RATE_LIMIT, 'rl:login:email', rosterEntry.email, EMAIL_COOLDOWN_SECONDS);
@@ -78,12 +77,9 @@ export async function onRequestPost({ request, env }) {
   const sent = await sendMagicLinkEmail(env, rosterEntry.email, verifyUrl.toString());
   if (!sent) {
     await enqueuePendingLogin(env.DB, rosterEntry.email, ip, 'email_failed');
+    // Same rationale as the daily-cap branch above: body must not leak roster membership.
     await padResponse(startTime);
-    return json({
-      ok: true,
-      queued: true,
-      message: "We're having trouble sending right now — you'll get an email automatically once it goes through.",
-    });
+    return json({ ok: true });
   }
   await incrementDailyCounter(env.RATE_LIMIT, 'rl:login:resend_daily');
 
