@@ -58,6 +58,7 @@ loginButton.addEventListener('click', async () => {
 });
 
 logoutButton.addEventListener('click', async () => {
+  stopScan();
   await fetch(`${API_BASE}/logout`, { credentials: 'include' });
   window.location.reload();
 });
@@ -73,6 +74,9 @@ async function startScan() {
     video.srcObject = stream;
     await video.play();
     scanning = true;
+    video.classList.remove('hidden');
+    scanButton.textContent = 'Stop Camera';
+    scanButton.disabled = false;
     requestAnimationFrame(scanFrame);
   } catch {
     setMessage(scanMessage, 'Could not access camera.', 'error');
@@ -86,6 +90,8 @@ function stopScan() {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
+  video.classList.add('hidden');
+  scanButton.textContent = 'Scan QR Code';
   scanButton.disabled = false;
 }
 
@@ -122,6 +128,12 @@ async function submitCheckin(token) {
   }
 }
 
-scanButton.addEventListener('click', startScan);
+scanButton.addEventListener('click', () => {
+  if (scanning) {
+    stopScan();
+  } else {
+    startScan();
+  }
+});
 
 checkSession();
