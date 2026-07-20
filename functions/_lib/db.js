@@ -104,14 +104,18 @@ export async function cleanupStaleData(db) {
   await db.prepare('DELETE FROM pending_login_emails WHERE created_at < ?').bind(cutoff).run();
 }
 
+// email is deliberately excluded: the downstream residency dashboard joins on
+// name, not email, so shipping email here is pure exposure with no consumer —
+// a leaked ADMIN_EXPORT_KEY should reveal names/attendance, not every
+// resident's email address.
 export async function exportAttendance(db, since) {
   if (since) {
     return db
-      .prepare('SELECT name, email, event_type, event_date, timestamp FROM attendance WHERE event_date >= ? ORDER BY event_date, event_type')
+      .prepare('SELECT name, event_type, event_date, timestamp FROM attendance WHERE event_date >= ? ORDER BY event_date, event_type')
       .bind(since)
       .all();
   }
   return db
-    .prepare('SELECT name, email, event_type, event_date, timestamp FROM attendance ORDER BY event_date, event_type')
+    .prepare('SELECT name, event_type, event_date, timestamp FROM attendance ORDER BY event_date, event_type')
     .all();
 }
