@@ -17,7 +17,7 @@ EVENT_TYPES = ["noon", "learning", "grandrounds"]
 # Event types whose QR is a single static image valid across a multi-day window
 # instead of rotating daily. Must mirror MULTI_DAY_WINDOWS in functions/_lib/eventTypes.js.
 MULTI_DAY_WINDOWS = {
-    "welcome": {"anchor_date": "2026-07-17", "valid_days": 7},
+    "welcome": {"anchor_date": "2026-07-17", "valid_days": 14},
 }
 
 TOKEN_HEX_LENGTH = 16  # must match TOKEN_HEX_LENGTH in functions/_lib/token.js
