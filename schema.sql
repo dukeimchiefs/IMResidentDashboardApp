@@ -49,3 +49,16 @@ CREATE TABLE pending_login_emails (
 );
 
 CREATE INDEX idx_pending_login_emails_created ON pending_login_emails (created_at);
+
+-- Rate limiting (replaces the earlier KV-backed version — KV's read-then-write
+-- isn't atomic, so concurrent bursts could bypass limits outright; D1 writes to
+-- a single database are serialized, so an atomic upsert here actually holds).
+-- `expires_at` is a unix-epoch-seconds cutoff used only for periodic cleanup —
+-- the fixed-window/cooldown/daily-counter logic itself is driven by `key`.
+CREATE TABLE rate_limit_counters (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_rate_limit_counters_expires ON rate_limit_counters (expires_at);

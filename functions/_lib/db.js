@@ -91,6 +91,19 @@ export async function deletePendingLogin(db, id) {
   await db.prepare('DELETE FROM pending_login_emails WHERE id = ?').bind(id).run();
 }
 
+const RETENTION_DAYS = 30;
+
+// Prunes data with no ongoing purpose: magic links that are used or expired
+// (single-use, 15-minute TTL — nothing legitimate reads them after that), and
+// login_rejections/pending_login_emails past a 30-day retention window. Called
+// from the retry-worker's existing 15-minute cron tick.
+export async function cleanupStaleData(db) {
+  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  await db.prepare('DELETE FROM magic_links WHERE used = 1 OR expires_at < ?').bind(new Date().toISOString()).run();
+  await db.prepare('DELETE FROM login_rejections WHERE timestamp < ?').bind(cutoff).run();
+  await db.prepare('DELETE FROM pending_login_emails WHERE created_at < ?').bind(cutoff).run();
+}
+
 export async function exportAttendance(db, since) {
   if (since) {
     return db

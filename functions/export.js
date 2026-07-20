@@ -8,7 +8,7 @@ const IP_WINDOW_SECONDS = 600; // 10 attempts / 10 minutes per IP
 
 export async function onRequestGet({ request, env }) {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-  const ipOk = await checkFixedWindow(env.RATE_LIMIT, 'rl:export:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
+  const ipOk = await checkFixedWindow(env.DB, 'rl:export:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
   if (!ipOk) return json({ ok: false, error: 'rate_limited' }, 429);
 
   const adminKey = request.headers.get('X-Admin-Key') || '';

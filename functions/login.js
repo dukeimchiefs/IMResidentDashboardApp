@@ -21,9 +21,18 @@ async function padResponse(startTime) {
   if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
 }
 
-export async function onRequestPost({ request, env }) {
+// Cloudflare's log viewer is only as trusted as everyone with dashboard/API
+// access to the account — keep full addresses out of it where the log line
+// doesn't need one to be useful for debugging.
+function redactEmail(email) {
+  const at = email.indexOf('@');
+  if (at <= 1) return '*'.repeat(email.length);
+  return `${email[0]}***@${email.slice(at + 1)}`;
+}
+
+export async function onRequestPost({ request, env, waitUntil }) {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-  const ipOk = await checkFixedWindow(env.RATE_LIMIT, 'rl:login:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
+  const ipOk = await checkFixedWindow(env.DB, 'rl:login:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
   if (!ipOk) {
     return json(
       { ok: false, error: 'rate_limited', message: 'Too many requests. Please wait a few minutes and try again.' },
@@ -42,7 +51,7 @@ export async function onRequestPost({ request, env }) {
   const rosterEntry = await getRosterEntry(env.DB, normalizedEmail);
 
   if (!rosterEntry) {
-    console.warn('login_rejected_not_in_roster', normalizedEmail);
+    console.warn('login_rejected_not_in_roster', redactEmail(normalizedEmail));
     await insertLoginRejection(env.DB, normalizedEmail, ip).catch((err) =>
       console.error('failed_to_log_login_rejection', err)
     );
@@ -51,7 +60,7 @@ export async function onRequestPost({ request, env }) {
     return json({ ok: true });
   }
 
-  const sentToday = await peekDailyCounter(env.RATE_LIMIT, 'rl:login:resend_daily');
+  const sentToday = await peekDailyCounter(env.DB, 'rl:login:resend_daily');
   if (sentToday >= RESEND_DAILY_SOFT_CAP) {
     await enqueuePendingLogin(env.DB, rosterEntry.email, ip, 'high_demand');
     // Body must be identical to the not-on-roster response below — any
@@ -61,7 +70,7 @@ export async function onRequestPost({ request, env }) {
     return json({ ok: true });
   }
 
-  const allowedToSend = await checkCooldown(env.RATE_LIMIT, 'rl:login:email', rosterEntry.email, EMAIL_COOLDOWN_SECONDS);
+  const allowedToSend = await checkCooldown(env.DB, 'rl:login:email', rosterEntry.email, EMAIL_COOLDOWN_SECONDS);
   if (!allowedToSend) {
     // Already sent one recently — don't duplicate-send, but don't alarm the resident either.
     await padResponse(startTime);
@@ -74,14 +83,22 @@ export async function onRequestPost({ request, env }) {
   verifyUrl.pathname = '/verify';
   verifyUrl.search = `?token=${token}`;
 
-  const sent = await sendMagicLinkEmail(env, rosterEntry.email, verifyUrl.toString());
-  if (!sent) {
-    await enqueuePendingLogin(env.DB, rosterEntry.email, ip, 'email_failed');
-    // Same rationale as the daily-cap branch above: body must not leak roster membership.
-    await padResponse(startTime);
-    return json({ ok: true });
-  }
-  await incrementDailyCounter(env.RATE_LIMIT, 'rl:login:resend_daily');
+  // Don't make the resident's response wait on the live Resend network call.
+  // Besides the latency hit, awaiting it means a slow send or a failed-then-
+  // retried one runs past the padResponse() floor below and becomes an
+  // observable signal that this address is on the roster — the same class of
+  // leak MIN_RESPONSE_MS exists to close, just via response time instead of
+  // response body. Fire it in the background instead.
+  waitUntil(
+    (async () => {
+      const sent = await sendMagicLinkEmail(env, rosterEntry.email, verifyUrl.toString());
+      if (sent) {
+        await incrementDailyCounter(env.DB, 'rl:login:resend_daily');
+      } else {
+        await enqueuePendingLogin(env.DB, rosterEntry.email, ip, 'email_failed');
+      }
+    })()
+  );
 
   await padResponse(startTime);
   return json({ ok: true });

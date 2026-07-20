@@ -84,7 +84,7 @@ export async function onRequestGet({ request, env }) {
 
 export async function onRequestPost({ request, env }) {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-  const ipOk = await checkFixedWindow(env.RATE_LIMIT, 'rl:attendance:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
+  const ipOk = await checkFixedWindow(env.DB, 'rl:attendance:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
   if (!ipOk) {
     return html(passwordFormPage('Too many attempts. Please wait a few minutes and try again.'), 429);
   }

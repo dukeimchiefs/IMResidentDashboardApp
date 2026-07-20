@@ -7,10 +7,6 @@ binding = "DB"
 database_name = "attendance-db"
 database_id = "b989ffda-3604-4f37-a13d-e1c685848f9c"
 
-[[kv_namespaces]]
-binding = "RATE_LIMIT"
-id = "4ef044e29836413e8af33f103bef6adc"
-
 [vars]
 # nicholasbrazeau.com is verified in Resend (DKIM/SPF/DMARC), so sign-in
 # emails send from a real address instead of the onboarding@resend.dev
