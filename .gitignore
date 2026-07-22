@@ -7,6 +7,9 @@ scripts/_seed_roster.sql
 .env
 .dev.vars
 
+# Personal scratch/reference files - never intended for GitHub.
+local-notes/
+
 # ~/.gitignore has a blanket *.html rule; this repo's frontend is static HTML
 # and needs these tracked.
 !frontend/*.html
