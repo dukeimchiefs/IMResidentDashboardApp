@@ -4,7 +4,7 @@ compatibility_date = "2026-07-01"
 
 # Cloudflare Pages Functions cannot run Cron Triggers — scheduled execution
 # requires a standalone Worker, hence this separate deployable. It shares the
-# same D1 database and KV namespace as the main Pages project.
+# same D1 database as the main Pages project.
 [triggers]
 crons = ["*/15 * * * *"]
 

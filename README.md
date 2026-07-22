@@ -36,13 +36,11 @@ If you deployed before the `login_rejections` or `pending_login_emails` tables w
 added, apply `migrate_add_login_rejections.sql` and `migrate_add_pending_login_emails.sql`
 the same way.
 
-### 1b. Rate limiting KV namespace
+### 1b. Rate limiting
 
-`/login`, `/attendance`, and `/export` are throttled using a Cloudflare KV namespace
-(`RATE_LIMIT` binding, already configured in `wrangler.toml` with a live namespace ID).
-No further setup needed unless you're forking this into a new Cloudflare account, in
-which case run `wrangler kv namespace create RATE_LIMIT` and update the `id` in
-`wrangler.toml`.
+`/login`, `/attendance`, and `/export` are throttled using the same D1 database
+(`rate_limit_counters` table, created by `schema.sql` / `migrate_add_rate_limit_counters.sql`).
+No separate setup needed — it rides along with the D1 database from step 1.
 
 ### 2. Pages project secrets
 
@@ -78,7 +76,7 @@ or magic links will silently fail to deliver again.
 
 **Free-tier daily cap:** Resend's free plan caps sends at 100/day (3,000/month). If the
 whole residency (~170 people) tries to sign in the same day, some sends will hit that
-cap. `functions/login.js` tracks a same-day send counter in KV and, once within 10 of
+cap. `functions/login.js` tracks a same-day send counter in D1 and, once within 10 of
 the cap (or if a send fails outright), queues the email in the `pending_login_emails`
 D1 table instead of dropping it — the resident sees "we'll email you automatically,
 no need to retry." The separate `retry-worker/` Worker (see below) drains that queue
@@ -93,7 +91,7 @@ launch day), upgrading the Resend plan removes the cap entirely instead.
 ### 1c. Retry-queue Worker (`retry-worker/`)
 
 Cloudflare Pages Functions can't run Cron Triggers, so the scheduled retry queue lives
-in its own standalone Worker, sharing the same D1 database and `RATE_LIMIT` KV namespace
+in its own standalone Worker, sharing the same D1 database
 as the Pages project.
 
 ```sh
@@ -145,7 +143,7 @@ event's current code full-size, for projecting on the screen in that event's roo
 
 ```sh
 wrangler d1 execute attendance-db --local --file=./schema.sql
-npm run dev   # wrangler pages dev frontend — D1 and KV bindings auto-detected from
+npm run dev   # wrangler pages dev frontend — D1 binding auto-detected from
               # wrangler.toml, secrets read from .dev.vars
 ```
 
