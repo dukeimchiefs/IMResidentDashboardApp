@@ -92,7 +92,7 @@ export async function onRequestPost({ request, env }) {
   const formData = await request.formData();
   const password = formData.get('password') || '';
 
-  if (!env.ADMIN_PASSWORD || !timingSafeEqualStr(password, env.ADMIN_PASSWORD)) {
+  if (!env.ADMIN_PASSWORD || !(await timingSafeEqualStr(password, env.ADMIN_PASSWORD))) {
     return html(passwordFormPage('Incorrect password.'), 401);
   }
 

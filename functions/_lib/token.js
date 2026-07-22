@@ -1,4 +1,5 @@
 import { QR_PREFIXES, MULTI_DAY_WINDOWS } from './eventTypes.js';
+import { timingSafeEqualStr } from './auth.js';
 
 const TOKEN_HEX_LENGTH = 16; // 16 hex chars = 8 bytes = 64 bits, plenty vs. guessing within a single day
 
@@ -42,13 +43,6 @@ export function parsePayload(payload) {
   return { type, token };
 }
 
-function timingSafeEqualStr(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
 function addDaysToDateStr(dateStr, days) {
   const d = new Date(`${dateStr}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
@@ -68,6 +62,6 @@ export async function validateScannedPayload(secret, payload, dateStr = todayET(
   const tokenDate = window ? window.anchorDate : dateStr;
 
   const expected = await computeDailyToken(secret, tokenDate, parsed.type);
-  const valid = timingSafeEqualStr(expected, parsed.token);
+  const valid = await timingSafeEqualStr(expected, parsed.token);
   return valid ? { valid: true, type: parsed.type } : { valid: false };
 }

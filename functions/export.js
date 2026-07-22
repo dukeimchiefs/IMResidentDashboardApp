@@ -12,7 +12,7 @@ export async function onRequestGet({ request, env }) {
   if (!ipOk) return json({ ok: false, error: 'rate_limited' }, 429);
 
   const adminKey = request.headers.get('X-Admin-Key') || '';
-  if (!env.ADMIN_EXPORT_KEY || !timingSafeEqualStr(adminKey, env.ADMIN_EXPORT_KEY)) {
+  if (!env.ADMIN_EXPORT_KEY || !(await timingSafeEqualStr(adminKey, env.ADMIN_EXPORT_KEY))) {
     return json({ ok: false, error: 'unauthorized' }, 401);
   }
   const url = new URL(request.url);

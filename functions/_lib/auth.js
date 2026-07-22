@@ -27,10 +27,19 @@ async function hmacSign(secret, message) {
   return base64url(new Uint8Array(sig));
 }
 
-export function timingSafeEqualStr(a, b) {
-  if (a.length !== b.length) return false;
+async function sha256(str) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return new Uint8Array(digest);
+}
+
+// Hashes both operands to a fixed-length digest before comparing, so the
+// comparison never short-circuits on `a.length !== b.length` — that early
+// return leaks the length of the secret (e.g. ADMIN_PASSWORD) via timing,
+// even though the value itself stays hidden.
+export async function timingSafeEqualStr(a, b) {
+  const [ha, hb] = await Promise.all([sha256(a), sha256(b)]);
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < ha.length; i++) diff |= ha[i] ^ hb[i];
   return diff === 0;
 }
 
@@ -56,7 +65,7 @@ async function verifySignedValue(secret, value) {
   const payloadB64 = value.slice(0, dot);
   const sig = value.slice(dot + 1);
   const expectedSig = await hmacSign(secret, payloadB64);
-  if (!timingSafeEqualStr(sig, expectedSig)) return null;
+  if (!(await timingSafeEqualStr(sig, expectedSig))) return null;
   let payload;
   try {
     payload = JSON.parse(new TextDecoder().decode(base64urlToBytes(payloadB64)));
