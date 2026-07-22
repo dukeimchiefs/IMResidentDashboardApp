@@ -13,8 +13,19 @@ export async function getMagicLink(db, token) {
   return db.prepare('SELECT token, email, expires_at, used FROM magic_links WHERE token = ?').bind(token).first();
 }
 
-export async function markMagicLinkUsed(db, token) {
-  await db.prepare('UPDATE magic_links SET used = 1 WHERE token = ?').bind(token).run();
+// Atomically claims an unused, unexpired magic link. A separate SELECT followed
+// by UPDATE lets two concurrent requests both observe used=0 and both mint a
+// session cookie. UPDATE ... WHERE ... RETURNING makes exactly one request win.
+export async function consumeMagicLink(db, token, nowIso) {
+  return db
+    .prepare(
+      `UPDATE magic_links
+       SET used = 1
+       WHERE token = ? AND used = 0 AND expires_at >= ?
+       RETURNING email`
+    )
+    .bind(token, nowIso)
+    .first();
 }
 
 export async function hasCheckedIn(db, email, eventDate, eventType) {

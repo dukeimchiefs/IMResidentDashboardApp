@@ -1,8 +1,15 @@
-import { getMagicLink, markMagicLinkUsed, getRosterEntry } from './_lib/db.js';
+import { getMagicLink, consumeMagicLink, getRosterEntry } from './_lib/db.js';
 import { createSessionCookie } from './_lib/auth.js';
 import { json, html } from './_lib/http.js';
 
 const VERIFY_PAGE_STYLE = `body{font-family:system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f7;color:#1c1c1e}.card{text-align:center;max-width:320px;padding:2rem}button{padding:0.75rem 1.5rem;font-size:1rem;border:none;border-radius:8px;background:#0071e3;color:#fff;cursor:pointer}button:disabled{opacity:0.5}p{font-size:0.95rem}`;
+
+// generateRandomToken() produces 32 random bytes encoded as 43 base64url
+// characters. Reject other shapes before touching D1, especially arbitrarily
+// large attacker-controlled query/body values.
+function isMagicLinkToken(token) {
+  return typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token);
+}
 
 // GET /verify never mutates the token — it only renders a page requiring an
 // explicit click. Email security gateways and link-preview scanners routinely
@@ -13,6 +20,13 @@ export async function onRequestGet({ request, env }) {
   const url = new URL(request.url);
   const token = url.searchParams.get('token');
   if (!token) return html(`<!doctype html><html><head><style>${VERIFY_PAGE_STYLE}</style></head><body><div class="card"><p>Missing sign-in link.</p></div></body></html>`, 400);
+
+  if (!isMagicLinkToken(token)) {
+    return html(
+      `<!doctype html><html><head><style>${VERIFY_PAGE_STYLE}</style></head><body><div class="card"><p>This sign-in link is invalid or has expired. Request a new one from the app.</p></div></body></html>`,
+      400
+    );
+  }
 
   const link = await getMagicLink(env.DB, token);
   if (!link || link.used || new Date(link.expires_at) < new Date()) {
@@ -68,12 +82,12 @@ export async function onRequestGet({ request, env }) {
 export async function onRequestPost({ request, env }) {
   const { token } = await request.json().catch(() => ({}));
   if (!token) return json({ ok: false, error: 'missing_token' }, 400);
-
-  const link = await getMagicLink(env.DB, token);
-  if (!link || link.used || new Date(link.expires_at) < new Date()) {
+  if (!isMagicLinkToken(token)) {
     return json({ ok: false, error: 'invalid_or_expired_token' }, 400);
   }
-  await markMagicLinkUsed(env.DB, token);
+
+  const link = await consumeMagicLink(env.DB, token, new Date().toISOString());
+  if (!link) return json({ ok: false, error: 'invalid_or_expired_token' }, 400);
 
   const rosterEntry = await getRosterEntry(env.DB, link.email);
   if (!rosterEntry) return json({ ok: false, error: 'not_on_roster' }, 400);

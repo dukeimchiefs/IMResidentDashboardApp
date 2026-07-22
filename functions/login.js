@@ -8,6 +8,7 @@ const IP_LIMIT = 10;
 const IP_WINDOW_SECONDS = 600; // 10 requests / 10 minutes per IP
 const EMAIL_COOLDOWN_SECONDS = 60; // 1 send / minute per roster email
 const RESEND_DAILY_SOFT_CAP = 90; // stay under Resend free tier's 100/day hard cap
+const MAX_EMAIL_LENGTH = 254;
 
 // Every roster-membership-dependent branch below pads its response to this floor
 // so response latency can't be used to tell whether a submitted email is on the
@@ -30,6 +31,14 @@ function redactEmail(email) {
   return `${email[0]}***@${email.slice(at + 1)}`;
 }
 
+function normalizeEmail(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized.length > MAX_EMAIL_LENGTH) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null;
+  return normalized;
+}
+
 export async function onRequestPost({ request, env, waitUntil }) {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
   const ipOk = await checkFixedWindow(env.DB, 'rl:login:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
@@ -42,12 +51,11 @@ export async function onRequestPost({ request, env, waitUntil }) {
 
   const startTime = Date.now();
   const { email } = await request.json().catch(() => ({}));
-  if (!email || typeof email !== 'string') {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) {
     await padResponse(startTime);
     return json({ ok: true });
   }
-
-  const normalizedEmail = email.toLowerCase();
   const rosterEntry = await getRosterEntry(env.DB, normalizedEmail);
 
   if (!rosterEntry) {

@@ -19,7 +19,9 @@ export async function sendMagicLinkEmail(env, email, verifyUrl) {
         body,
       });
       if (res.ok) return true;
-      console.error('resend_send_failed', res.status, await res.text().catch(() => ''));
+      // Provider error bodies can echo recipient addresses or request details;
+      // the status is enough to diagnose/retry without copying PII into logs.
+      console.error('resend_send_failed', res.status);
     } catch (err) {
       console.error('resend_send_threw', err);
     }
