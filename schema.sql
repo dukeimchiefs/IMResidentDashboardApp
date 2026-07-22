@@ -23,9 +23,10 @@ CREATE TABLE attendance (
 CREATE INDEX idx_attendance_date_type ON attendance (event_date, event_type);
 CREATE INDEX idx_attendance_email ON attendance (email);
 
--- Admin-visible log of /login attempts for emails not found in the roster
--- (typos, rotated-out residents, or probing). Resident-facing response stays
--- generic regardless, to avoid roster-enumeration.
+-- Admin-visible log of /login attempts for emails not found in the roster.
+-- `email` stores only a masked hint (first character + domain), never the full
+-- submitted address. Resident-facing responses remain generic to avoid
+-- roster-enumeration.
 CREATE TABLE login_rejections (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT NOT NULL,

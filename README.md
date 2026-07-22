@@ -38,9 +38,11 @@ the same way.
 
 ### 1b. Rate limiting
 
-`/login`, `/attendance`, and `/export` are throttled using the same D1 database
+`/login`, `/verify`, `/attendance`, and `/export` are throttled using the same D1 database
 (`rate_limit_counters` table, created by `schema.sql` / `migrate_add_rate_limit_counters.sql`).
-No separate setup needed — it rides along with the D1 database from step 1.
+In production, Cloudflare Turnstile additionally challenges `/login` and the
+state-changing `POST /verify`; `/attendance` is protected at the edge by a
+Cloudflare Access application requiring the administrator identity and MFA.
 
 ### 2. Pages project secrets
 
@@ -51,6 +53,8 @@ wrangler pages secret put QR_SECRET            --project-name=imresidentdashboar
 wrangler pages secret put RESEND_KEY           --project-name=imresidentdashboardapp  # Resend API key
 wrangler pages secret put ADMIN_EXPORT_KEY     --project-name=imresidentdashboardapp  # random string, protects GET /export
 wrangler pages secret put ADMIN_PASSWORD       --project-name=imresidentdashboardapp  # password gating the /attendance table view
+wrangler pages secret put TURNSTILE_SECRET      --project-name=imresidentdashboardapp  # server-side Turnstile Siteverify secret
+wrangler pages secret put SECURITY_ALERT_EMAIL  --project-name=imresidentdashboardapp  # recipient for repeated admin/export auth failure alerts
 ```
 
 **`QR_SECRET` must be set to the exact same value in two places** — here (Pages secret)
@@ -149,7 +153,7 @@ npm run dev   # wrangler pages dev frontend — D1 binding auto-detected from
 
 Create a `.dev.vars` file (gitignored) at the repo root with test values for
 `SESSION_SECRET`, `ADMIN_SESSION_SECRET`, `QR_SECRET`, `RESEND_KEY`, `ADMIN_EXPORT_KEY`,
-`ADMIN_PASSWORD`. Generate local test QR codes with
+`ADMIN_PASSWORD`, `TURNSTILE_SECRET`, and `SECURITY_ALERT_EMAIL`. Generate local test QR codes with
 `QR_SECRET=<same-value-as-.dev.vars> python scripts/generate_qr.py`.
 
 ## Viewing attendance
@@ -161,10 +165,15 @@ lists recent `/login` attempts for emails **not** found in the roster (typos, ro
 residents, or probing) — the resident-facing response is always the same generic "check
 your email" message regardless of roster membership (to avoid roster-enumeration), so
 this admin-only log is the way to notice a legitimate resident whose email isn't seeded
-yet.
+yet. Rejected addresses are stored and displayed only as a masked hint such as
+`j***@example.edu`, never as the full submitted address. Apply
+`migrate_redact_login_rejections.sql` once to redact historical rows.
 
 `GET /export` (header `X-Admin-Key: <ADMIN_EXPORT_KEY>`, optional `?since=YYYY-MM-DD`)
-returns all attendance rows as JSON, including `event_type`
-(`noon_conference` / `learning_session` / `grand_rounds`). This app does not compute or
-store point values — the downstream game dashboard owns scoring and applies its own point
-weighting per event type.
+returns attendance names, dates, timestamps, and `event_type`, but deliberately excludes
+resident emails. The production path is also a Cloudflare Access Service Auth application;
+the downstream dashboard supplies its dedicated `CF-Access-Client-Id` and
+`CF-Access-Client-Secret` headers in addition to `X-Admin-Key`. Five failed inner admin or
+export authentications across all IPs within ten minutes send one security alert for that
+window. This app does not compute or store point values — the downstream game dashboard
+owns scoring and applies its own point weighting per event type.

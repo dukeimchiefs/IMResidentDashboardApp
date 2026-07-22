@@ -3,6 +3,7 @@ import { exportAttendance, getRecentLoginRejections, countPendingLogins } from '
 import { dbValueToLabel } from './_lib/eventTypes.js';
 import { html } from './_lib/http.js';
 import { checkFixedWindow } from './_lib/rateLimit.js';
+import { recordSecurityFailure } from './_lib/securityAlerts.js';
 
 const IP_LIMIT = 10;
 const IP_WINDOW_SECONDS = 600; // 10 attempts / 10 minutes per IP
@@ -58,7 +59,7 @@ function attendanceTablePage(rows, rejections, pendingCount) {
 
   <h2>Recent sign-in attempts not on roster (${rejections.length})</h2>
   <table>
-    <thead><tr><th>When</th><th>Email</th><th>IP</th></tr></thead>
+    <thead><tr><th>When</th><th>Email hint</th><th>IP</th></tr></thead>
     <tbody>${rejectionBody}</tbody>
   </table>
 
@@ -82,7 +83,7 @@ export async function onRequestGet({ request, env }) {
   return html(attendanceTablePage(sorted, rejections, pendingCount));
 }
 
-export async function onRequestPost({ request, env }) {
+export async function onRequestPost({ request, env, waitUntil }) {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
   const ipOk = await checkFixedWindow(env.DB, 'rl:attendance:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
   if (!ipOk) {
@@ -93,6 +94,7 @@ export async function onRequestPost({ request, env }) {
   const password = formData.get('password') || '';
 
   if (!env.ADMIN_PASSWORD || !(await timingSafeEqualStr(password, env.ADMIN_PASSWORD))) {
+    await recordSecurityFailure(env, waitUntil, 'admin_auth_failure');
     return html(passwordFormPage('Incorrect password.'), 401);
   }
 

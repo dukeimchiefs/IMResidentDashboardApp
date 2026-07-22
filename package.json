@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler pages dev frontend",
-    "deploy": "wrangler pages deploy frontend"
+    "deploy": "wrangler pages deploy frontend",
+    "test": "node --test"
   },
   "devDependencies": {
     "wrangler": "^4.110.0"

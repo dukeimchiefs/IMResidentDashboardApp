@@ -14,11 +14,8 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-// Buckets time into fixed windows of `windowSeconds` and returns whether this
-// call is within `limit` for the current window (and records it if so).
-// The check-and-increment is one atomic INSERT .. ON CONFLICT .. RETURNING
-// statement — there's no read-then-write gap for concurrent callers to race.
-export async function checkFixedWindow(db, prefix, id, limit, windowSeconds) {
+// Atomically increments a fixed-window counter and returns the new count.
+export async function incrementFixedWindowCounter(db, prefix, id, windowSeconds) {
   const bucket = Math.floor(Date.now() / 1000 / windowSeconds);
   const key = `${prefix}:${id}:${bucket}`;
   const expiresAt = (bucket + 1) * windowSeconds + 5;
@@ -30,7 +27,15 @@ export async function checkFixedWindow(db, prefix, id, limit, windowSeconds) {
     )
     .bind(key, expiresAt)
     .first();
-  return row.count <= limit;
+  return row.count;
+}
+
+// Buckets time into fixed windows of `windowSeconds` and returns whether this
+// call is within `limit` for the current window (and records it if so).
+// The check-and-increment is one atomic INSERT .. ON CONFLICT .. RETURNING
+// statement — there's no read-then-write gap for concurrent callers to race.
+export async function checkFixedWindow(db, prefix, id, limit, windowSeconds) {
+  return (await incrementFixedWindowCounter(db, prefix, id, windowSeconds)) <= limit;
 }
 
 // Returns true if `id` has not hit `prefix` within the last `cooldownSeconds`,

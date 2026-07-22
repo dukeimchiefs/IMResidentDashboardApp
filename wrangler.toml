@@ -13,3 +13,5 @@ database_id = "b989ffda-3604-4f37-a13d-e1c685848f9c"
 # sandbox — this is required for delivery to actual resident @duke.edu
 # inboxes, not just the account owner's own verified address.
 RESEND_FROM = "noreply@nicholasbrazeau.com"
+TURNSTILE_SITEKEY = "0x4AAAAAAD7jlOk1_ML_5VY1"
+TURNSTILE_HOSTNAME = "imresidentdashboardapp.pages.dev"

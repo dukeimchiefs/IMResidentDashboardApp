@@ -29,3 +29,39 @@ export async function sendMagicLinkEmail(env, email, verifyUrl) {
   }
   return false;
 }
+
+const SECURITY_EVENT_LABELS = {
+  export_auth_failure: 'attendance export authentication',
+  admin_auth_failure: 'attendance administrator authentication',
+};
+
+export async function sendSecurityAlertEmail(env, eventType, count, windowMinutes) {
+  const label = SECURITY_EVENT_LABELS[eventType];
+  if (!label || !env.RESEND_KEY || !env.SECURITY_ALERT_EMAIL) {
+    console.error('security_alert_not_configured', eventType);
+    return false;
+  }
+
+  const body = JSON.stringify({
+    from: env.RESEND_FROM || 'onboarding@resend.dev',
+    to: env.SECURITY_ALERT_EMAIL,
+    subject: `Security alert: repeated ${label} failures`,
+    html: `<p>The application recorded ${count} failed ${label} attempts within ${windowMinutes} minutes.</p><p>No submitted credentials, email addresses, or IP addresses are included in this alert. Review Cloudflare Access and application logs for authorized investigation.</p>`,
+  });
+
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.RESEND_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body,
+    });
+    if (response.ok) return true;
+    console.error('security_alert_send_failed', eventType, response.status);
+  } catch {
+    console.error('security_alert_send_threw', eventType);
+  }
+  return false;
+}

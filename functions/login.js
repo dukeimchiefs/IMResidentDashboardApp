@@ -3,6 +3,7 @@ import { generateRandomToken, magicLinkExpiry } from './_lib/auth.js';
 import { json } from './_lib/http.js';
 import { sendMagicLinkEmail } from './_lib/resend.js';
 import { checkFixedWindow, checkCooldown, peekDailyCounter, incrementDailyCounter } from './_lib/rateLimit.js';
+import { validateTurnstile } from './_lib/turnstile.js';
 
 const IP_LIMIT = 10;
 const IP_WINDOW_SECONDS = 600; // 10 requests / 10 minutes per IP
@@ -27,7 +28,7 @@ async function padResponse(startTime) {
 // doesn't need one to be useful for debugging.
 function redactEmail(email) {
   const at = email.indexOf('@');
-  if (at <= 1) return '*'.repeat(email.length);
+  if (at <= 0) return '***';
   return `${email[0]}***@${email.slice(at + 1)}`;
 }
 
@@ -50,7 +51,15 @@ export async function onRequestPost({ request, env, waitUntil }) {
   }
 
   const startTime = Date.now();
-  const { email } = await request.json().catch(() => ({}));
+  const { email, turnstileToken } = await request.json().catch(() => ({}));
+  const challengeOk = await validateTurnstile(env, turnstileToken, ip, 'login');
+  if (!challengeOk) {
+    return json(
+      { ok: false, error: 'challenge_failed', message: 'Please complete the security check and try again.' },
+      403
+    );
+  }
+
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) {
     await padResponse(startTime);
@@ -60,7 +69,7 @@ export async function onRequestPost({ request, env, waitUntil }) {
 
   if (!rosterEntry) {
     console.warn('login_rejected_not_in_roster', redactEmail(normalizedEmail));
-    await insertLoginRejection(env.DB, normalizedEmail, ip).catch((err) =>
+    await insertLoginRejection(env.DB, redactEmail(normalizedEmail), ip).catch((err) =>
       console.error('failed_to_log_login_rejection', err)
     );
     // Always ok:true here too, regardless of roster membership, to avoid roster-enumeration.

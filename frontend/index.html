@@ -12,7 +12,8 @@
 
     <div id="login-screen">
       <input id="email-input" type="email" placeholder="you@duke.edu" autocomplete="email" />
-      <button id="login-button">Send sign-in link</button>
+      <div id="login-turnstile" class="challenge" data-sitekey="0x4AAAAAAD7jlOk1_ML_5VY1"></div>
+      <button id="login-button" disabled>Send sign-in link</button>
       <p id="login-message" class="message"></p>
     </div>
 
@@ -26,6 +27,7 @@
     </div>
   </div>
 
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" integrity="sha384-b5Ya4Bq3qCyz39m2ISh+4DxjAIljdeFwK/BsXLuj9gugaNwAcj/ia15fxNZL9Nlx" crossorigin="anonymous"></script>
   <script src="scan.js"></script>
 </body>
