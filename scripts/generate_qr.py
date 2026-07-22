@@ -33,6 +33,9 @@ def compute_token(date_str: str, event_type: str) -> str:
     return digest[:TOKEN_HEX_LENGTH]
 
 
+VALID_EVENT_TYPES = set(EVENT_TYPES) | set(MULTI_DAY_WINDOWS)
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     date_str = today_et()
@@ -40,6 +43,13 @@ def main():
     # (e.g. the daily vs. weekly GitHub Actions workflows) pass an explicit subset so a
     # weekly-only event's QR isn't needlessly regenerated and committed every day.
     types_to_generate = sys.argv[1:] or EVENT_TYPES
+    # event_type feeds directly into an output filename below (and, via the
+    # GitHub Actions workflow_dispatch input, can originate outside this repo's
+    # own hardcoded call sites) — reject anything not on the known list before
+    # it's used for a path, rather than trusting arbitrary CLI input.
+    unknown = [t for t in types_to_generate if t not in VALID_EVENT_TYPES]
+    if unknown:
+        sys.exit(f"Unknown event type(s): {', '.join(unknown)}. Valid: {', '.join(sorted(VALID_EVENT_TYPES))}")
     for event_type in types_to_generate:
         window = MULTI_DAY_WINDOWS.get(event_type)
         token_date = window["anchor_date"] if window else date_str

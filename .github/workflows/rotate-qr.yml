@@ -28,9 +28,15 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install qrcode[pil]
-      - run: python scripts/generate_qr.py ${{ github.event.inputs.event_types || 'noon learning' }}
+      # EVENT_TYPES goes through env, not a direct ${{ }} splice into the run
+      # script — GitHub substitutes ${{ }} into the script text before the
+      # shell parses it, so an input containing shell metacharacters would
+      # execute as code. An env var is safely word-split by the shell but
+      # never re-parsed for metacharacters.
+      - run: python scripts/generate_qr.py $EVENT_TYPES
         env:
           QR_SECRET: ${{ secrets.QR_SECRET }}
+          EVENT_TYPES: ${{ github.event.inputs.event_types || 'noon learning' }}
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: 'chore: rotate daily QR codes'
