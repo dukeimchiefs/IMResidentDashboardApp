@@ -5,7 +5,16 @@ on:
     # ~4-5am America/New_York year-round (UTC-5/UTC-4), safely after Eastern
     # midnight in both DST and standard time, well before any morning conference.
     - cron: '0 9 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      event_types:
+        description: >-
+          Space-separated event types to (re)generate, e.g. "welcome". Defaults
+          to the normal daily pair. Useful for one-off regeneration of a static
+          event (like welcome) with the correct QR_SECRET, since that secret
+          can't be read back out to regenerate it locally by hand.
+        required: false
+        default: 'noon learning'
 
 permissions:
   contents: write
@@ -19,10 +28,10 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install qrcode[pil]
-      - run: python scripts/generate_qr.py noon learning
+      - run: python scripts/generate_qr.py ${{ github.event.inputs.event_types || 'noon learning' }}
         env:
           QR_SECRET: ${{ secrets.QR_SECRET }}
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: 'chore: rotate daily QR codes'
-          file_pattern: 'frontend/assets/qr/qr_noon.png frontend/assets/qr/qr_learning.png'
+          file_pattern: 'frontend/assets/qr/qr_*.png'
