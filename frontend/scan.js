@@ -56,7 +56,9 @@ function renderLoginChallenge() {
     callback(token) {
       loginChallengeToken = token;
       loginButton.disabled = false;
-      setMessage(loginMessage, '', '');
+      if (loginMessage.textContent.startsWith('Security check')) {
+        setMessage(loginMessage, '', '');
+      }
     },
     'expired-callback'() {
       loginChallengeToken = '';
