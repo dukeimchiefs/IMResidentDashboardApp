@@ -31,11 +31,26 @@ export async function incrementFixedWindowCounter(db, prefix, id, windowSeconds)
 }
 
 // Buckets time into fixed windows of `windowSeconds` and returns whether this
-// call is within `limit` for the current window (and records it if so).
-// The check-and-increment is one atomic INSERT .. ON CONFLICT .. RETURNING
-// statement — there's no read-then-write gap for concurrent callers to race.
+// call is within `limit` for the current window (and records it if so). Unlike
+// incrementFixedWindowCounter above, the conflict branch only increments WHEN
+// still under `limit` — once a window is exhausted, further calls hit the
+// WHERE clause, skip the UPDATE, and get nothing back from RETURNING, so a
+// caller hammering a blocked window doesn't keep costing a D1 write per call.
 export async function checkFixedWindow(db, prefix, id, limit, windowSeconds) {
-  return (await incrementFixedWindowCounter(db, prefix, id, windowSeconds)) <= limit;
+  const bucket = Math.floor(Date.now() / 1000 / windowSeconds);
+  const key = `${prefix}:${id}:${bucket}`;
+  const expiresAt = (bucket + 1) * windowSeconds + 5;
+  const row = await db
+    .prepare(
+      `INSERT INTO rate_limit_counters (key, count, expires_at) VALUES (?, 1, ?)
+       ON CONFLICT(key) DO UPDATE
+         SET count = count + 1
+         WHERE rate_limit_counters.count < ?
+       RETURNING count`
+    )
+    .bind(key, expiresAt, limit)
+    .first();
+  return !!row;
 }
 
 // Returns true if `id` has not hit `prefix` within the last `cooldownSeconds`,

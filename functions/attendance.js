@@ -19,6 +19,13 @@ input[type=password]{width:100%;padding:0.75rem;font-size:1rem;border:1px solid 
 button{padding:0.75rem 1.5rem;font-size:1rem;border:none;border-radius:8px;background:#00539b;color:#fff;cursor:pointer}
 .error{color:#c62828}`;
 
+// This route never renders a <script> tag, so script-src can be locked down
+// entirely rather than falling back to http.js's same-origin-scripts default.
+const ATTENDANCE_PAGE_HEADERS = {
+  'Content-Security-Policy':
+    "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+};
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -72,7 +79,7 @@ function attendanceTablePage(rows, rejections, pendingCount) {
 
 export async function onRequestGet({ request, env }) {
   const authed = await verifyAdminSession(env.ADMIN_SESSION_SECRET, request);
-  if (!authed) return html(passwordFormPage());
+  if (!authed) return html(passwordFormPage(), 200, ATTENDANCE_PAGE_HEADERS);
 
   const { results } = await exportAttendance(env.DB);
   const sorted = [...results].sort(
@@ -80,14 +87,14 @@ export async function onRequestGet({ request, env }) {
   );
   const { results: rejections } = await getRecentLoginRejections(env.DB);
   const pendingCount = await countPendingLogins(env.DB);
-  return html(attendanceTablePage(sorted, rejections, pendingCount));
+  return html(attendanceTablePage(sorted, rejections, pendingCount), 200, ATTENDANCE_PAGE_HEADERS);
 }
 
 export async function onRequestPost({ request, env, waitUntil }) {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
   const ipOk = await checkFixedWindow(env.DB, 'rl:attendance:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
   if (!ipOk) {
-    return html(passwordFormPage('Too many attempts. Please wait a few minutes and try again.'), 429);
+    return html(passwordFormPage('Too many attempts. Please wait a few minutes and try again.'), 429, ATTENDANCE_PAGE_HEADERS);
   }
 
   const formData = await request.formData();
@@ -95,7 +102,7 @@ export async function onRequestPost({ request, env, waitUntil }) {
 
   if (!env.ADMIN_PASSWORD || !(await timingSafeEqualStr(password, env.ADMIN_PASSWORD))) {
     await recordSecurityFailure(env, waitUntil, 'admin_auth_failure');
-    return html(passwordFormPage('Incorrect password.'), 401);
+    return html(passwordFormPage('Incorrect password.'), 401, ATTENDANCE_PAGE_HEADERS);
   }
 
   const cookie = await createAdminCookie(env.ADMIN_SESSION_SECRET);

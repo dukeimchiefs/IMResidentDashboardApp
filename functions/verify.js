@@ -8,6 +8,17 @@ const VERIFY_PAGE_STYLE = `body{font-family:system-ui,-apple-system,sans-serif;d
 const IP_LIMIT = 20;
 const IP_WINDOW_SECONDS = 600;
 
+// Applied to every response on this route (even the error pages — the token
+// sits in the URL regardless of which branch handles the request).
+const VERIFY_PAGE_HEADERS = {
+  'Content-Security-Policy':
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+  // Overrides http.js's default: this URL's ?token= is single-use and
+  // sensitive, so don't rely on the browser's default referrer behavior —
+  // require no-referrer explicitly, including to challenges.cloudflare.com.
+  'Referrer-Policy': 'no-referrer',
+};
+
 // generateRandomToken() produces 32 random bytes encoded as 43 base64url
 // characters. Reject other shapes before touching D1, especially arbitrarily
 // large attacker-controlled query/body values.
@@ -23,19 +34,20 @@ function isMagicLinkToken(token) {
 export async function onRequestGet({ request, env }) {
   const url = new URL(request.url);
   const token = url.searchParams.get('token');
-  if (!token) return html(`<!doctype html><html><head><style>${VERIFY_PAGE_STYLE}</style></head><body><div class="card"><p>Missing sign-in link.</p></div></body></html>`, 400);
+  if (!token) return html(`<!doctype html><html><head><style>${VERIFY_PAGE_STYLE}</style></head><body><div class="card"><p>Missing sign-in link.</p></div></body></html>`, 400, VERIFY_PAGE_HEADERS);
 
   if (!isMagicLinkToken(token)) {
     return html(
       `<!doctype html><html><head><style>${VERIFY_PAGE_STYLE}</style></head><body><div class="card"><p>This sign-in link is invalid or has expired. Request a new one from the app.</p></div></body></html>`,
-      400
+      400,
+      VERIFY_PAGE_HEADERS
     );
   }
 
   const sitekey = env.TURNSTILE_SITEKEY;
   if (typeof sitekey !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(sitekey)) {
     console.error('turnstile_sitekey_missing');
-    return html(`<!doctype html><html><head><style>${VERIFY_PAGE_STYLE}</style></head><body><div class="card"><p>Sign-in verification is temporarily unavailable. Try again later.</p></div></body></html>`, 503);
+    return html(`<!doctype html><html><head><style>${VERIFY_PAGE_STYLE}</style></head><body><div class="card"><p>Sign-in verification is temporarily unavailable. Try again later.</p></div></body></html>`, 503, VERIFY_PAGE_HEADERS);
   }
 
   return html(`<!doctype html>
@@ -104,7 +116,7 @@ export async function onRequestGet({ request, env }) {
     });
   </script>
 </body>
-</html>`);
+</html>`, 200, VERIFY_PAGE_HEADERS);
 }
 
 // POST /verify does the actual consuming: marks the token used and issues the
