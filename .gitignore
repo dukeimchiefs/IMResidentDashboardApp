@@ -10,6 +10,13 @@ scripts/_seed_roster.sql
 # Personal scratch/reference files - never intended for GitHub.
 local-notes/
 
+# Project instructions for Claude Code - not meant to be tracked in the repo.
+CLAUDE.md
+
+# Local-only attendance-timing misuse check (script, wrapper, and its
+# generated report images) - never intended for GitHub.
+/check_for_misuse.sh
+
 # ~/.gitignore has a blanket *.html rule; this repo's frontend is static HTML
 # and needs these tracked.
 !frontend/*.html
