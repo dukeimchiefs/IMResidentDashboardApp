@@ -129,6 +129,20 @@ python scripts/seed_roster.py roster.csv --remote --apply
 CSV must have `email` and `name` columns. Re-run any time the roster changes
 (`INSERT OR REPLACE`, so it's safe to re-run with an updated file).
 
+## Sessions
+
+The resident session cookie is good for 30 days, but it **slides**: any authenticated
+request (`/me` on page load, `/checkin` on a scan) made once the session is over halfway
+to expiry re-issues it with a fresh 30 days (`renewSessionCookie` in
+`functions/_lib/auth.js`). A resident who shows up at least monthly never has to redo the
+magic-link flow; a session that stops being used still lapses 30 days after its last use.
+
+The cookie is a self-contained HMAC with no server-side session record, so individual
+sessions can't be revoked — rotating `SESSION_SECRET` is the only kill switch and it signs
+out everyone at once. Roster removal is still enforced independently: `/checkin` re-reads
+the roster on every scan, so a renewed cookie can't keep checking in someone who's been
+taken off it.
+
 ## QR rotation
 
 `.github/workflows/rotate-qr.yml` runs `scripts/generate_qr.py noon learning` every

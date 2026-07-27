@@ -1,5 +1,14 @@
 const SESSION_COOKIE_NAME = 'session';
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // 30 days
+
+// Sessions slide rather than expiring on a fixed clock from sign-in: any
+// authenticated request past the halfway mark re-issues the cookie with a full
+// SESSION_MAX_AGE_SECONDS again. A resident who checks in at least monthly
+// therefore never has to redo the magic-link flow, while a session that stops
+// being used still lapses 30 days after its LAST use (tighter than a long
+// fixed window would be). Renewing only past halfway keeps the typical request
+// from carrying a Set-Cookie header it doesn't need.
+const SESSION_RENEW_AFTER_SECONDS = SESSION_MAX_AGE_SECONDS / 2; // renew once <15 days remain
 const MAGIC_LINK_TTL_MINUTES = 15;
 const ADMIN_COOKIE_NAME = 'admin_session';
 const ADMIN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // 7 days
@@ -97,11 +106,29 @@ export function clearSessionCookie() {
   return `${SESSION_COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 }
 
-// Returns { email, name } if the request carries a valid, unexpired session cookie, else null.
+// Returns { email, name, exp } if the request carries a valid, unexpired session
+// cookie, else null. `exp` is carried through so callers can hand the session to
+// renewSessionCookie() without re-parsing the cookie.
 export async function verifySession(secret, request) {
   const cookies = parseCookies(request);
   const payload = await verifySignedValue(secret, cookies[SESSION_COOKIE_NAME]);
-  return payload ? { email: payload.email, name: payload.name } : null;
+  return payload ? { email: payload.email, name: payload.name, exp: payload.exp } : null;
+}
+
+// Given an already-verified session, returns a refreshed Set-Cookie value once
+// the session is over halfway to expiry, or null when it's still fresh enough
+// to leave alone. Only ever call this with the output of verifySession() — it
+// re-signs whatever identity it's handed without re-checking the signature.
+export async function renewSessionCookie(secret, session) {
+  if (!session?.exp) return null;
+  if (session.exp - Date.now() > SESSION_RENEW_AFTER_SECONDS * 1000) return null;
+  return createSessionCookie(secret, { email: session.email, name: session.name });
+}
+
+// Convenience for callers that pass a headers object straight into json()/html().
+export async function sessionRenewalHeaders(secret, session) {
+  const cookie = await renewSessionCookie(secret, session);
+  return cookie ? { 'Set-Cookie': cookie } : {};
 }
 
 export function magicLinkExpiry() {

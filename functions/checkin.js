@@ -1,5 +1,5 @@
 import { hasCheckedIn, insertAttendance, getRosterEntry } from './_lib/db.js';
-import { verifySession } from './_lib/auth.js';
+import { verifySession, sessionRenewalHeaders } from './_lib/auth.js';
 import { validateScannedPayload, todayET } from './_lib/token.js';
 import { EVENT_TYPES } from './_lib/eventTypes.js';
 import { json } from './_lib/http.js';
@@ -16,11 +16,18 @@ export async function onRequestPost({ request, env }) {
   const session = await verifySession(env.SESSION_SECRET, request);
   if (!session) return json({ ok: false, error: 'not_authenticated' }, 401);
 
+  // Slide the session forward on any authenticated scan, so a resident who only
+  // ever opens the app straight to the scanner stays signed in the same way one
+  // who lands on /me does. Attached to every response below, including the
+  // rejections — the session is equally valid whichever way the scan lands.
+  const renewal = await sessionRenewalHeaders(env.SESSION_SECRET, session);
+
   const emailOk = await checkFixedWindow(env.DB, 'rl:checkin:email', session.email, EMAIL_LIMIT, EMAIL_WINDOW_SECONDS);
   if (!emailOk) {
     return json(
       { ok: false, error: 'rate_limited', message: 'Too many requests. Please wait a few minutes and try again.' },
-      429
+      429,
+      renewal
     );
   }
 
@@ -29,11 +36,11 @@ export async function onRequestPost({ request, env }) {
   // signing in would otherwise keep checking in, undermining the leaderboard's
   // trust that attendance rows always map to a currently-active resident.
   const rosterEntry = await getRosterEntry(env.DB, session.email);
-  if (!rosterEntry) return json({ ok: false, error: 'not_on_roster' }, 403);
+  if (!rosterEntry) return json({ ok: false, error: 'not_on_roster' }, 403, renewal);
 
   const { token } = await request.json().catch(() => ({}));
   const result = await validateScannedPayload(env.QR_SECRET, token);
-  if (!result.valid) return json({ ok: false, error: 'invalid_token' }, 400);
+  if (!result.valid) return json({ ok: false, error: 'invalid_token' }, 400, renewal);
 
   const eventInfo = EVENT_TYPES[result.type];
   const eventDate = todayET();
@@ -48,7 +55,8 @@ export async function onRequestPost({ request, env }) {
         eventLabel: eventInfo.label,
         message: `You already checked in to ${eventInfo.label} today.`,
       },
-      409
+      409,
+      renewal
     );
   }
 
@@ -70,15 +78,20 @@ export async function onRequestPost({ request, env }) {
         eventLabel: eventInfo.label,
         message: `You already checked in to ${eventInfo.label} today.`,
       },
-      409
+      409,
+      renewal
     );
   }
 
-  return json({
-    ok: true,
-    eventType: eventInfo.dbValue,
-    eventLabel: eventInfo.label,
-    name: rosterEntry.name,
-    message: `Checked in to ${eventInfo.label}, ${rosterEntry.name}!`,
-  });
+  return json(
+    {
+      ok: true,
+      eventType: eventInfo.dbValue,
+      eventLabel: eventInfo.label,
+      name: rosterEntry.name,
+      message: `Checked in to ${eventInfo.label}, ${rosterEntry.name}!`,
+    },
+    200,
+    renewal
+  );
 }
