@@ -15,7 +15,7 @@ export const QR_PREFIXES = Object.keys(EVENT_TYPES); // ['noon', 'learning', 'gr
 // so the same printed/emailed QR keeps working every day in [anchorDate, anchorDate + validDays).
 // Must mirror MULTI_DAY_WINDOWS in scripts/generate_qr.py.
 export const MULTI_DAY_WINDOWS = {
-  welcome: { anchorDate: '2026-07-17', validDays: 14 },
+  welcome: { anchorDate: '2026-07-17', validDays: 21 },
 };
 
 export function dbValueToLabel(dbValue) {
