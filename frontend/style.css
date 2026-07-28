@@ -79,7 +79,10 @@ button:disabled {
   transform-origin: center;
 }
 
-#zoom-controls {
+/* :not(.hidden) so the shared .hidden utility still wins -- a bare #zoom-controls
+   rule outranks it on specificity and would leave the row visible before the
+   camera ever starts. */
+#zoom-controls:not(.hidden) {
   display: flex;
   align-items: center;
   gap: 0.5rem;

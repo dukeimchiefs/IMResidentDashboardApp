@@ -88,6 +88,14 @@ async function isStalePayload(secret, parsed, dateStr) {
     // Also treat next week's code as stale rather than unrecognised: a rotation
     // that lands early would otherwise read as garbage to a resident.
     candidates.push(addDaysToDateStr(thisWeek, 7));
+    // Lecture QRs rotated *daily* until 2026-07-28, so every code that predates
+    // the weekly switch is anchored to a calendar day, not a week. Without
+    // these, each one reports as unrecognised rather than stale -- which is
+    // precisely the population of codes still stuck on hall displays and
+    // printouts, and the ones most likely to be scanned.
+    for (let i = 0; i < STALE_LOOKBACK_WEEKS * 7; i++) {
+      candidates.push(addDaysToDateStr(dateStr, -i));
+    }
   } else {
     candidates.push(addDaysToDateStr(dateStr, -1));
   }

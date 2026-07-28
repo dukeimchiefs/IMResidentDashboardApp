@@ -54,6 +54,18 @@ test('a rotated-out code is reported stale, unrecognised input is not', async ()
   assert.deepEqual(await validateScannedPayload(SECRET, `learning:${noonToken}`, MONDAY), { valid: false });
 });
 
+test('codes from the pre-weekly daily scheme still report as stale', async () => {
+  // Every QR in circulation before 2026-07-28 was anchored to a calendar day.
+  for (const day of [MONDAY, '2026-07-28', '2026-07-15']) {
+    const legacy = `noon:${await computeDailyToken(SECRET, day, 'noon')}`;
+    assert.deepEqual(
+      await validateScannedPayload(SECRET, legacy, '2026-08-04'),
+      { valid: false, stale: true },
+      `legacy daily code for ${day} should read as stale`,
+    );
+  }
+});
+
 test('staleness recognition stops after the lookback horizon', async () => {
   const withinHorizon = await qrFor('noon', weekAnchor('2026-06-08')); // 8 weeks back
   const beyondHorizon = await qrFor('noon', weekAnchor('2026-05-25')); // 10 weeks back
