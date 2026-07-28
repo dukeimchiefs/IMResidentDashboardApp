@@ -19,8 +19,16 @@
 
     <div id="scan-screen" class="hidden">
       <p id="welcome-message"></p>
-      <video id="scan-video" class="hidden" playsinline muted></video>
+      <div id="scan-viewport" class="hidden">
+        <video id="scan-video" playsinline muted></video>
+      </div>
       <canvas id="scan-canvas" class="hidden"></canvas>
+      <div id="zoom-controls" class="hidden">
+        <button type="button" id="zoom-out" class="zoom-step" aria-label="Zoom out">&minus;</button>
+        <input id="zoom-slider" type="range" min="1" max="4" step="0.1" value="1" aria-label="Camera zoom" />
+        <button type="button" id="zoom-in" class="zoom-step" aria-label="Zoom in">+</button>
+        <span id="zoom-level" aria-live="polite">1.0&times;</span>
+      </div>
       <button id="scan-button">Scan QR Code</button>
       <p id="scan-message" class="message"></p>
       <button id="logout-button">Log out</button>

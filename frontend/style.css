@@ -65,11 +65,47 @@ button:disabled {
   cursor: default;
 }
 
-#scan-video {
-  width: 100%;
+#scan-viewport {
+  overflow: hidden;
   border-radius: 8px;
   margin-bottom: 1rem;
   background: #000;
+  line-height: 0;
+}
+
+#scan-video {
+  width: 100%;
+  background: #000;
+  transform-origin: center;
+}
+
+#zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+#zoom-slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--duke-royal);
+}
+
+button.zoom-step {
+  width: 2.75rem;
+  flex: none;
+  padding: 0.5rem 0;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+#zoom-level {
+  flex: none;
+  width: 3rem;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .message {

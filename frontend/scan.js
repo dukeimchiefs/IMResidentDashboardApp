@@ -13,7 +13,13 @@ const scanButton = document.getElementById('scan-button');
 const scanMessage = document.getElementById('scan-message');
 const logoutButton = document.getElementById('logout-button');
 const video = document.getElementById('scan-video');
+const scanViewport = document.getElementById('scan-viewport');
 const canvas = document.getElementById('scan-canvas');
+const zoomControls = document.getElementById('zoom-controls');
+const zoomSlider = document.getElementById('zoom-slider');
+const zoomOutButton = document.getElementById('zoom-out');
+const zoomInButton = document.getElementById('zoom-in');
+const zoomLevel = document.getElementById('zoom-level');
 const loginTurnstile = document.getElementById('login-turnstile');
 
 let loginChallengeToken = '';
@@ -113,15 +119,37 @@ logoutButton.addEventListener('click', async () => {
 let stream = null;
 let scanning = false;
 
+// A lecture-hall QR is small in frame, so ask for the highest sensible capture
+// resolution and let zoom work on those extra pixels. Frames are decoded at
+// most MAX_SCAN_WIDTH wide to keep jsQR fast enough for a live preview.
+const CAPTURE_WIDTH = 1920;
+const CAPTURE_HEIGHT = 1080;
+const MAX_SCAN_WIDTH = 1280;
+// Cameras that expose no zoom capability fall back to cropping the frame.
+const MAX_DIGITAL_ZOOM = 4;
+
+let zoom = 1;
+let zoomRange = { min: 1, max: MAX_DIGITAL_ZOOM, step: 0.1 };
+// Set when the camera can zoom optically/natively; null means digital cropping.
+let zoomTrack = null;
+let zoomApplyQueued = false;
+
 async function startScan() {
   setMessage(scanMessage, '', '');
   scanButton.disabled = true;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'environment',
+        width: { ideal: CAPTURE_WIDTH },
+        height: { ideal: CAPTURE_HEIGHT },
+      },
+    });
     video.srcObject = stream;
     await video.play();
     scanning = true;
-    video.classList.remove('hidden');
+    scanViewport.classList.remove('hidden');
+    setupZoom();
     scanButton.textContent = 'Stop Camera';
     scanButton.disabled = false;
     requestAnimationFrame(scanFrame);
@@ -137,18 +165,89 @@ function stopScan() {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
-  video.classList.add('hidden');
+  zoomTrack = null;
+  scanViewport.classList.add('hidden');
+  zoomControls.classList.add('hidden');
+  video.style.transform = '';
   scanButton.textContent = 'Scan QR Code';
   scanButton.disabled = false;
 }
 
+function setupZoom() {
+  const track = stream.getVideoTracks()[0];
+  if (!track) return;
+  // Keeps a distant code sharp while the resident holds the phone up.
+  track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+
+  const capabilities = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+  const nativeZoom = capabilities.zoom;
+  if (nativeZoom && nativeZoom.max > nativeZoom.min) {
+    zoomTrack = track;
+    zoomRange = {
+      min: nativeZoom.min,
+      max: nativeZoom.max,
+      step: nativeZoom.step || (nativeZoom.max - nativeZoom.min) / 100,
+    };
+  } else {
+    zoomTrack = null;
+    zoomRange = { min: 1, max: MAX_DIGITAL_ZOOM, step: 0.1 };
+  }
+
+  zoomSlider.min = String(zoomRange.min);
+  zoomSlider.max = String(zoomRange.max);
+  zoomSlider.step = String(zoomRange.step);
+  // Carry the previous zoom across restarts — the room hasn't moved.
+  setZoom(zoom);
+  zoomControls.classList.remove('hidden');
+}
+
+function setZoom(value) {
+  zoom = Math.min(zoomRange.max, Math.max(zoomRange.min, value));
+  zoomSlider.value = String(zoom);
+  zoomLevel.textContent = `${(zoom / zoomRange.min).toFixed(1)}×`;
+
+  if (zoomTrack) {
+    video.style.transform = '';
+    // Coalesce drag events: applyConstraints is async and rejects if it piles up.
+    if (!zoomApplyQueued) {
+      zoomApplyQueued = true;
+      requestAnimationFrame(() => {
+        zoomApplyQueued = false;
+        if (zoomTrack) zoomTrack.applyConstraints({ advanced: [{ zoom }] }).catch(() => {});
+      });
+    }
+  } else {
+    video.style.transform = `scale(${zoom})`;
+  }
+}
+
+function zoomStep() {
+  return zoomTrack ? Math.max(zoomRange.step, (zoomRange.max - zoomRange.min) / 10) : 0.5;
+}
+
+zoomSlider.addEventListener('input', () => setZoom(Number(zoomSlider.value)));
+zoomInButton.addEventListener('click', () => setZoom(zoom + zoomStep()));
+zoomOutButton.addEventListener('click', () => setZoom(zoom - zoomStep()));
+
 function scanFrame() {
   if (!scanning) return;
   if (video.readyState === video.HAVE_ENOUGH_DATA) {
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // Native zoom already crops in hardware, so only crop here for digital zoom.
+    const crop = zoomTrack ? 1 : zoom;
+    const sourceWidth = video.videoWidth / crop;
+    const sourceHeight = video.videoHeight / crop;
+    const sourceX = (video.videoWidth - sourceWidth) / 2;
+    const sourceY = (video.videoHeight - sourceHeight) / 2;
+    const scale = Math.min(1, MAX_SCAN_WIDTH / sourceWidth);
+
+    canvas.width = Math.round(sourceWidth * scale);
+    canvas.height = Math.round(sourceHeight * scale);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(
+      video,
+      sourceX, sourceY, sourceWidth, sourceHeight,
+      0, 0, canvas.width, canvas.height,
+    );
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const code = jsQR(imageData.data, imageData.width, imageData.height);
     if (code && code.data) {
