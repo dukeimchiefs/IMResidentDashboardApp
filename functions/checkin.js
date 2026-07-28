@@ -40,7 +40,22 @@ export async function onRequestPost({ request, env }) {
 
   const { token } = await request.json().catch(() => ({}));
   const result = await validateScannedPayload(env.QR_SECRET, token);
-  if (!result.valid) return json({ ok: false, error: 'invalid_token' }, 400, renewal);
+  if (!result.valid) {
+    // A code that was genuinely issued but has since rotated gets its own
+    // message: retrying is futile, and the fix is on the screen, not the phone.
+    if (result.stale) {
+      return json(
+        {
+          ok: false,
+          error: 'stale_token',
+          message: 'Stale QR Code. This code has expired — ask for the current code to be displayed, then scan again.',
+        },
+        400,
+        renewal
+      );
+    }
+    return json({ ok: false, error: 'invalid_token' }, 400, renewal);
+  }
 
   const eventInfo = EVENT_TYPES[result.type];
   const eventDate = todayET();

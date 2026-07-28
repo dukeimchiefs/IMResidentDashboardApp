@@ -64,24 +64,65 @@ export function weekAnchor(dateStr) {
   return d.toISOString().slice(0, 10);
 }
 
-// Returns { valid: boolean, type?: 'noon'|'learning'|'grandrounds'|'welcome' }
+// How far back a rejected code is still recognised as merely *stale* — a real
+// code that has since rotated, e.g. a printout left on a door or a lecture-hall
+// screen that never got refreshed. Purely cosmetic: it only chooses the error
+// message shown, and a stale code never checks anyone in.
+const STALE_LOOKBACK_WEEKS = 8;
+
+// Whether a rejected payload matches a token this secret genuinely issued for a
+// nearby period, rather than being unrecognised input.
+async function isStalePayload(secret, parsed, dateStr) {
+  const candidates = [];
+  const window = MULTI_DAY_WINDOWS[parsed.type];
+
+  if (window) {
+    // Reached only when dateStr falls outside the fixed window, so a match here
+    // means the code is real but its window has passed (or not yet opened).
+    candidates.push(window.anchorDate);
+  } else if (WEEKLY_TYPES.includes(parsed.type)) {
+    const thisWeek = weekAnchor(dateStr);
+    for (let i = 1; i <= STALE_LOOKBACK_WEEKS; i++) {
+      candidates.push(addDaysToDateStr(thisWeek, -7 * i));
+    }
+    // Also treat next week's code as stale rather than unrecognised: a rotation
+    // that lands early would otherwise read as garbage to a resident.
+    candidates.push(addDaysToDateStr(thisWeek, 7));
+  } else {
+    candidates.push(addDaysToDateStr(dateStr, -1));
+  }
+
+  for (const candidate of candidates) {
+    const expected = await computeDailyToken(secret, candidate, parsed.type);
+    if (await timingSafeEqualStr(expected, parsed.token)) return true;
+  }
+  return false;
+}
+
+// Returns { valid: boolean, stale?: true, type?: 'noon'|'learning'|'grandrounds'|'welcome' }
 export async function validateScannedPayload(secret, payload, dateStr = todayET()) {
   const parsed = parsePayload(payload);
   if (!parsed) return { valid: false };
 
   const window = MULTI_DAY_WINDOWS[parsed.type];
-  if (window) {
-    const windowEnd = addDaysToDateStr(window.anchorDate, window.validDays);
-    if (dateStr < window.anchorDate || dateStr >= windowEnd) return { valid: false };
+  const outOfWindow = window
+    && (dateStr < window.anchorDate
+      || dateStr >= addDaysToDateStr(window.anchorDate, window.validDays));
+
+  if (!outOfWindow) {
+    // Fixed-window types use their own anchor, weekly lecture types use the
+    // current week's Saturday, and anything else still rotates daily.
+    let tokenDate = dateStr;
+    if (window) tokenDate = window.anchorDate;
+    else if (WEEKLY_TYPES.includes(parsed.type)) tokenDate = weekAnchor(dateStr);
+
+    const expected = await computeDailyToken(secret, tokenDate, parsed.type);
+    if (await timingSafeEqualStr(expected, parsed.token)) return { valid: true, type: parsed.type };
   }
 
-  // Fixed-window types use their own anchor, weekly lecture types use the
-  // current week's Saturday, and anything else still rotates daily.
-  let tokenDate = dateStr;
-  if (window) tokenDate = window.anchorDate;
-  else if (WEEKLY_TYPES.includes(parsed.type)) tokenDate = weekAnchor(dateStr);
-
-  const expected = await computeDailyToken(secret, tokenDate, parsed.type);
-  const valid = await timingSafeEqualStr(expected, parsed.token);
-  return valid ? { valid: true, type: parsed.type } : { valid: false };
+  // Separate "a real code that has since rotated" from unrecognised input, so a
+  // resident scanning yesterday's screen is told the code is stale instead of
+  // being sent round the generic retry loop.
+  if (await isStalePayload(secret, parsed, dateStr)) return { valid: false, stale: true };
+  return { valid: false };
 }

@@ -35,8 +35,35 @@ test('one weekly QR scans on every lecture day of its week', async () => {
 
 test('last week\'s QR stops working once the new week starts', async () => {
   const stale = await qrFor('noon', SATURDAY);
-  assert.deepEqual(await validateScannedPayload(SECRET, stale, NEXT_SATURDAY), { valid: false });
-  assert.deepEqual(await validateScannedPayload(SECRET, stale, '2026-08-10'), { valid: false });
+  // Rejected, and flagged as stale rather than unrecognised.
+  assert.deepEqual(await validateScannedPayload(SECRET, stale, NEXT_SATURDAY), { valid: false, stale: true });
+  assert.deepEqual(await validateScannedPayload(SECRET, stale, '2026-08-10'), { valid: false, stale: true });
+});
+
+test('a rotated-out code is reported stale, unrecognised input is not', async () => {
+  // A code this secret really issued, weeks ago — the lecture-hall screen case.
+  const old = await qrFor('noon', weekAnchor('2026-06-15'));
+  assert.deepEqual(await validateScannedPayload(SECRET, old, MONDAY), { valid: false, stale: true });
+
+  // Genuinely unrecognised payloads must NOT claim to be stale.
+  for (const bad of ['noon:0123456789abcdef', 'noon:ffffffffffffffff']) {
+    assert.deepEqual(await validateScannedPayload(SECRET, bad, MONDAY), { valid: false });
+  }
+  // Nor should a valid token replayed under a different event type.
+  const noonToken = (await qrFor('noon', SATURDAY)).split(':')[1];
+  assert.deepEqual(await validateScannedPayload(SECRET, `learning:${noonToken}`, MONDAY), { valid: false });
+});
+
+test('staleness recognition stops after the lookback horizon', async () => {
+  const withinHorizon = await qrFor('noon', weekAnchor('2026-06-08')); // 8 weeks back
+  const beyondHorizon = await qrFor('noon', weekAnchor('2026-05-25')); // 10 weeks back
+  assert.deepEqual(await validateScannedPayload(SECRET, withinHorizon, MONDAY), { valid: false, stale: true });
+  assert.deepEqual(await validateScannedPayload(SECRET, beyondHorizon, MONDAY), { valid: false });
+});
+
+test('an expired welcome code reports stale rather than failing generically', async () => {
+  const payload = await qrFor('welcome', '2026-07-17'); // window closes 2026-08-07
+  assert.deepEqual(await validateScannedPayload(SECRET, payload, '2026-08-07'), { valid: false, stale: true });
 });
 
 test('a rotation run delayed into midweek still emits this week\'s token', async () => {
@@ -68,8 +95,9 @@ test('the fixed-window welcome QR is unaffected by weekly rotation', async () =>
     await validateScannedPayload(SECRET, payload, '2026-08-05'),
     { valid: true, type: 'welcome' },
   );
-  // ...and still expires at the end of its own window.
-  assert.deepEqual(await validateScannedPayload(SECRET, payload, '2026-08-07'), { valid: false });
+  // ...and still expires at the end of its own window (as stale, not garbage —
+  // see the dedicated expiry test below).
+  assert.deepEqual(await validateScannedPayload(SECRET, payload, '2026-08-07'), { valid: false, stale: true });
 });
 
 test('malformed and wrong-secret payloads are rejected', async () => {
