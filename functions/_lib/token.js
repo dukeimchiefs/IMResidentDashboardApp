@@ -1,4 +1,4 @@
-import { QR_PREFIXES, MULTI_DAY_WINDOWS } from './eventTypes.js';
+import { QR_PREFIXES, MULTI_DAY_WINDOWS, WEEKLY_TYPES } from './eventTypes.js';
 import { timingSafeEqualStr } from './auth.js';
 
 const TOKEN_HEX_LENGTH = 16; // 16 hex chars = 8 bytes = 64 bits, plenty vs. guessing within a single day
@@ -49,6 +49,21 @@ function addDaysToDateStr(dateStr, days) {
   return d.toISOString().slice(0, 10);
 }
 
+// Saturday that opens the lecture week containing dateStr. Must match
+// week_anchor() in scripts/generate_qr.py exactly.
+//
+// Deriving the token from the week's anchor rather than the generator's run
+// date is what makes the weekly rotation safe: the job can run any time between
+// Saturday and Friday and still produce the token the Worker expects, so
+// GitHub Actions' multi-hour cron delays can no longer strand a stale QR on
+// screen during a lecture.
+export function weekAnchor(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const daysSinceSaturday = (d.getUTCDay() + 1) % 7; // Sat=0, Sun=1, … Fri=6
+  d.setUTCDate(d.getUTCDate() - daysSinceSaturday);
+  return d.toISOString().slice(0, 10);
+}
+
 // Returns { valid: boolean, type?: 'noon'|'learning'|'grandrounds'|'welcome' }
 export async function validateScannedPayload(secret, payload, dateStr = todayET()) {
   const parsed = parsePayload(payload);
@@ -59,7 +74,12 @@ export async function validateScannedPayload(secret, payload, dateStr = todayET(
     const windowEnd = addDaysToDateStr(window.anchorDate, window.validDays);
     if (dateStr < window.anchorDate || dateStr >= windowEnd) return { valid: false };
   }
-  const tokenDate = window ? window.anchorDate : dateStr;
+
+  // Fixed-window types use their own anchor, weekly lecture types use the
+  // current week's Saturday, and anything else still rotates daily.
+  let tokenDate = dateStr;
+  if (window) tokenDate = window.anchorDate;
+  else if (WEEKLY_TYPES.includes(parsed.type)) tokenDate = weekAnchor(dateStr);
 
   const expected = await computeDailyToken(secret, tokenDate, parsed.type);
   const valid = await timingSafeEqualStr(expected, parsed.token);

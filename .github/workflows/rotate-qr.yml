@@ -1,20 +1,25 @@
-name: Rotate daily QR codes
+name: Rotate weekly QR codes
 
 on:
   schedule:
-    # ~4-5am America/New_York year-round (UTC-5/UTC-4), safely after Eastern
-    # midnight in both DST and standard time, well before any morning conference.
-    - cron: '0 9 * * *'
+    # Saturday ~4-5am America/New_York (UTC-5/UTC-4). Lectures run Mon-Fri, so
+    # rotating on Saturday leaves a full lecture-free day of slack: GitHub's
+    # scheduled runs are best-effort and have been starting 3-8 hours late,
+    # which under the old daily cron left a stale QR on screen well into noon
+    # conference. Tokens are anchored to the week (see week_anchor in
+    # scripts/generate_qr.py), so even a run that slips past Saturday still
+    # emits this week's correct token.
+    - cron: '0 9 * * 6'
   workflow_dispatch:
     inputs:
       event_types:
         description: >-
           Space-separated event types to (re)generate, e.g. "welcome". Defaults
-          to the normal daily pair. Useful for one-off regeneration of a static
+          to the weekly lecture set. Useful for one-off regeneration of a static
           event (like welcome) with the correct QR_SECRET, since that secret
           can't be read back out to regenerate it locally by hand.
         required: false
-        default: 'noon learning'
+        default: 'noon learning grandrounds'
 
 permissions:
   contents: write
@@ -36,8 +41,8 @@ jobs:
       - run: python scripts/generate_qr.py $EVENT_TYPES
         env:
           QR_SECRET: ${{ secrets.QR_SECRET }}
-          EVENT_TYPES: ${{ github.event.inputs.event_types || 'noon learning' }}
+          EVENT_TYPES: ${{ github.event.inputs.event_types || 'noon learning grandrounds' }}
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: 'chore: rotate daily QR codes'
+          commit_message: 'chore: rotate weekly QR codes'
           file_pattern: 'frontend/assets/qr/qr_*.png'

@@ -10,6 +10,14 @@ export const EVENT_TYPES = {
 
 export const QR_PREFIXES = Object.keys(EVENT_TYPES); // ['noon', 'learning', 'grandrounds', 'welcome']
 
+// Lecture QRs rotate once a week rather than daily. The token is HMAC'd against
+// the Saturday that opens the week (see weekAnchor in token.js), so one code
+// stays valid Sat–Fri and covers the whole Mon–Fri lecture week. This also
+// removes the daily race that broke scans: the rotation job now runs on a day
+// with no lectures, and a late run still computes the same week's token.
+// Must mirror WEEKLY_TYPES in scripts/generate_qr.py.
+export const WEEKLY_TYPES = ['noon', 'learning', 'grandrounds'];
+
 // Event types whose QR is a single static image valid across a multi-day window,
 // instead of rotating daily. The token is HMAC'd against anchorDate (not "today"),
 // so the same printed/emailed QR keeps working every day in [anchorDate, anchorDate + validDays).
