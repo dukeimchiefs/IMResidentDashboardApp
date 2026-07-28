@@ -9,7 +9,11 @@ const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // 30 days
 // fixed window would be). Renewing only past halfway keeps the typical request
 // from carrying a Set-Cookie header it doesn't need.
 const SESSION_RENEW_AFTER_SECONDS = SESSION_MAX_AGE_SECONDS / 2; // renew once <15 days remain
-const MAGIC_LINK_TTL_MINUTES = 15;
+// 45 minutes rather than 15: residents typically request a link mid-lecture and
+// don't reach their inbox until it ends, so the shorter window was expiring
+// links before they were ever clicked. Exported so the email copy in resend.js
+// states the real number instead of a literal that can drift out of sync.
+export const MAGIC_LINK_TTL_MINUTES = 45;
 const ADMIN_COOKIE_NAME = 'admin_session';
 const ADMIN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // 7 days
 

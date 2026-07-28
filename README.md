@@ -84,7 +84,7 @@ cap. `functions/login.js` tracks a same-day send counter in D1 and, once within 
 the cap (or if a send fails outright), queues the email in the `pending_login_emails`
 D1 table instead of dropping it — the resident sees "we'll email you automatically,
 no need to retry." The separate `retry-worker/` Worker (see below) drains that queue
-every 15 minutes, generating a fresh magic-link token per attempt (the original 15-minute
+every 15 minutes, generating a fresh magic-link token per attempt (the original 45-minute
 link would otherwise expire before a delayed retry could use it) and respecting the same
 shared daily-cap counter. This doesn't create Resend capacity that doesn't exist — a
 genuine 170-in-one-day burst still spreads deliveries across as many days as it takes to

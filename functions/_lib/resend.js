@@ -1,3 +1,5 @@
+import { MAGIC_LINK_TTL_MINUTES } from './auth.js';
+
 // Shared by functions/login.js (Pages Function) and retry-worker/src/index.js
 // (standalone scheduled Worker) so both send emails identically.
 export async function sendMagicLinkEmail(env, email, verifyUrl) {
@@ -5,7 +7,7 @@ export async function sendMagicLinkEmail(env, email, verifyUrl) {
     from: env.RESEND_FROM || 'onboarding@resend.dev',
     to: email,
     subject: 'Your sign-in link',
-    html: `<p>Click to sign in: <a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 15 minutes.</p>`,
+    html: `<p>Click to sign in: <a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in ${MAGIC_LINK_TTL_MINUTES} minutes.</p>`,
   });
 
   for (let attempt = 0; attempt < 2; attempt++) {

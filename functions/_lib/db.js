@@ -105,7 +105,7 @@ export async function deletePendingLogin(db, id) {
 const RETENTION_DAYS = 30;
 
 // Prunes data with no ongoing purpose: magic links that are used or expired
-// (single-use, 15-minute TTL — nothing legitimate reads them after that), and
+// (single-use, 45-minute TTL — nothing legitimate reads them after that), and
 // login_rejections/pending_login_emails past a 30-day retention window. Called
 // from the retry-worker's existing 15-minute cron tick.
 export async function cleanupStaleData(db) {
