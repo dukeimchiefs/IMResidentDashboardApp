@@ -120,11 +120,25 @@ let stream = null;
 let scanning = false;
 
 // A lecture-hall QR is small in frame, so ask for the highest sensible capture
-// resolution and let zoom work on those extra pixels. Frames are decoded at
-// most MAX_SCAN_WIDTH wide to keep jsQR fast enough for a live preview.
+// resolution and let zoom work on those extra pixels.
 const CAPTURE_WIDTH = 1920;
 const CAPTURE_HEIGHT = 1080;
-const MAX_SCAN_WIDTH = 1280;
+
+// Decode budget for the pure-JS fallback. Measured on desktop Chrome, jsQR runs
+// ~380ms/frame on a 1080x1920 frame versus ~40ms for the native detector; on
+// mid-range Android that became seconds per frame, so a hand-held scan never
+// landed a clean one — preview running, nothing decoded, no error reported.
+//
+// The cap is on the LONG edge, which is the actual fix. The previous cap was on
+// WIDTH, so a 1920x1080 landscape frame (iOS) was correctly reduced to 1280x720
+// while a 1080x1920 portrait frame (Android) slipped through at full 2M pixels
+// because its *width* was already under the limit. Keeping the number at 1280
+// leaves iOS byte-for-byte as it is today — it is the platform currently
+// working, and distant-QR sensitivity there must not regress.
+const MAX_JSQR_EDGE = 1280;
+// Throttle decode attempts so a slow decode can't saturate the main thread and
+// stall the live preview. rAF alone gave no upper bound on work per second.
+const DECODE_INTERVAL_MS = 100;
 // Cameras that expose no zoom capability fall back to cropping the frame.
 const MAX_DIGITAL_ZOOM = 4;
 
@@ -181,6 +195,9 @@ async function startScan() {
     setupZoom();
     scanButton.textContent = 'Stop Camera';
     scanButton.disabled = false;
+    debugDecodes = 0;
+    debugStartedAt = performance.now();
+    lastDecodeAt = 0;
     requestAnimationFrame(scanFrame);
   } catch (err) {
     console.error('camera_start_failed', err?.name, err?.message);
@@ -260,40 +277,153 @@ zoomSlider.addEventListener('input', () => setZoom(Number(zoomSlider.value)));
 zoomInButton.addEventListener('click', () => setZoom(zoom + zoomStep()));
 zoomOutButton.addEventListener('click', () => setZoom(zoom - zoomStep()));
 
-function scanFrame() {
+// Resolved once per page load: a native BarcodeDetector supporting QR, or null
+// to mean "use jsQR". Cached as a promise so the async capability probe runs
+// once rather than on every decode attempt.
+let detectorPromise = null;
+
+function getDetector() {
+  if (!detectorPromise) {
+    detectorPromise = (async () => {
+      try {
+        if (!('BarcodeDetector' in window)) {
+          debugDetector = 'jsQR (no BarcodeDetector)';
+          return null;
+        }
+        const formats = await window.BarcodeDetector.getSupportedFormats();
+        if (!formats.includes('qr_code')) {
+          debugDetector = 'jsQR (no qr_code format)';
+          return null;
+        }
+        debugDetector = 'BarcodeDetector (native)';
+        return new window.BarcodeDetector({ formats: ['qr_code'] });
+      } catch (err) {
+        debugDetector = `jsQR (probe threw ${err?.name})`;
+        return null;
+      }
+    })();
+  }
+  return detectorPromise;
+}
+
+// Draws the current frame into `canvas`, honouring digital zoom, and returns the
+// 2d context. maxEdge caps the longest side; 0 means full resolution.
+function drawFrame(maxEdge) {
+  // Native zoom already crops in hardware, so only crop here for digital zoom.
+  const crop = zoomTrack ? 1 : zoom;
+  const sourceWidth = video.videoWidth / crop;
+  const sourceHeight = video.videoHeight / crop;
+  const sourceX = (video.videoWidth - sourceWidth) / 2;
+  const sourceY = (video.videoHeight - sourceHeight) / 2;
+  const scale = maxEdge ? Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight)) : 1;
+
+  canvas.width = Math.round(sourceWidth * scale);
+  canvas.height = Math.round(sourceHeight * scale);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(
+    video,
+    sourceX, sourceY, sourceWidth, sourceHeight,
+    0, 0, canvas.width, canvas.height,
+  );
+  return ctx;
+}
+
+async function decodeFrame() {
+  const detector = await getDetector();
+  if (detector) {
+    // Hardware-backed, so hand it the untouched video element when we aren't
+    // digitally cropping — that skips a canvas copy entirely. No resolution cap
+    // on this path: it is fast enough to keep the full distant-QR sensitivity.
+    let source = video;
+    if (!zoomTrack && zoom !== 1) {
+      drawFrame(0);
+      source = canvas;
+    }
+    try {
+      const codes = await detector.detect(source);
+      const hit = codes.find((c) => c.rawValue);
+      return hit ? hit.rawValue : null;
+    } catch {
+      // Some Android builds expose BarcodeDetector but throw on detect(). Demote
+      // to jsQR for the rest of the session rather than wedging the scanner.
+      detectorPromise = Promise.resolve(null);
+    }
+  }
+  const ctx = drawFrame(MAX_JSQR_EDGE);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  // dontInvert halves the work: these QRs are always dark-on-light, generated by
+  // scripts/generate_qr.py, so probing for an inverted code is wasted effort.
+  const code = jsQR(imageData.data, imageData.width, imageData.height, {
+    inversionAttempts: 'dontInvert',
+  });
+  return code && code.data ? code.data : null;
+}
+
+// ?debug=1 shows which decoder is live, the real stream resolution and the
+// achieved decode rate. Diagnosing this on a resident's Android phone otherwise
+// means remote-debugging their handset; residents never see it without the flag.
+const debugEnabled = new URLSearchParams(window.location.search).get('debug') === '1';
+let debugEl = null;
+let debugDecodes = 0;
+let debugStartedAt = 0;
+let debugDetector = 'probing';
+
+function updateDebug(frameReady) {
+  if (!debugEnabled) return;
+  if (!debugEl) {
+    debugEl = document.createElement('pre');
+    debugEl.style.cssText =
+      'font:11px/1.4 ui-monospace,monospace;text-align:left;background:#111;color:#0f0;' +
+      'padding:.5rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap';
+    scanMessage.parentNode.insertBefore(debugEl, scanMessage);
+  }
+  const secs = debugStartedAt ? (performance.now() - debugStartedAt) / 1000 : 0;
+  debugEl.textContent = [
+    `decoder    ${debugDetector}`,
+    `stream     ${video.videoWidth}x${video.videoHeight}`,
+    `readyState ${video.readyState} (frameReady=${frameReady})`,
+    `zoom       ${zoom.toFixed(2)} (${zoomTrack ? 'native' : 'digital'})`,
+    `decodes    ${debugDecodes} in ${secs.toFixed(1)}s = ${secs ? (debugDecodes / secs).toFixed(1) : '0'}/s`,
+    `canvas     ${canvas.width}x${canvas.height}`,
+  ].join('\n');
+}
+
+let decodeInFlight = false;
+let lastDecodeAt = 0;
+
+async function scanFrame(now) {
   if (!scanning) return;
   // A live MediaStream is not a buffered file: Chrome on Android commonly holds
   // readyState at HAVE_CURRENT_DATA and never advertises HAVE_ENOUGH_DATA, so
   // the old `=== HAVE_ENOUGH_DATA` check spun this loop forever — preview
   // visible, no frame ever decoded, no error. Decode as soon as there's a frame
   // to decode, and require real dimensions so the first ticks (videoWidth 0)
-  // don't hand jsQR a zero-sized buffer.
-  if (video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0) {
-    // Native zoom already crops in hardware, so only crop here for digital zoom.
-    const crop = zoomTrack ? 1 : zoom;
-    const sourceWidth = video.videoWidth / crop;
-    const sourceHeight = video.videoHeight / crop;
-    const sourceX = (video.videoWidth - sourceWidth) / 2;
-    const sourceY = (video.videoHeight - sourceHeight) / 2;
-    const scale = Math.min(1, MAX_SCAN_WIDTH / sourceWidth);
-
-    canvas.width = Math.round(sourceWidth * scale);
-    canvas.height = Math.round(sourceHeight * scale);
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(
-      video,
-      sourceX, sourceY, sourceWidth, sourceHeight,
-      0, 0, canvas.width, canvas.height,
-    );
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height);
-    if (code && code.data) {
-      stopScan();
-      submitCheckin(code.data);
-      return;
+  // don't hand the decoder a zero-sized buffer.
+  const frameReady = video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0;
+  if (frameReady && !decodeInFlight && now - lastDecodeAt >= DECODE_INTERVAL_MS) {
+    lastDecodeAt = now;
+    decodeInFlight = true;
+    try {
+      const data = await decodeFrame();
+      debugDecodes += 1;
+      // decodeFrame() awaits, so the resident may have hit "Stop Camera" in the
+      // meantime — don't check them in after they cancelled.
+      if (!scanning) return;
+      if (data) {
+        stopScan();
+        submitCheckin(data);
+        return;
+      }
+    } catch (err) {
+      // An exception here used to kill the rAF loop outright, which looked
+      // exactly like "the app does nothing" — keep looping, but leave a trace.
+      console.error('decode_failed', err?.name, err?.message);
+    } finally {
+      decodeInFlight = false;
     }
   }
-  requestAnimationFrame(scanFrame);
+  updateDebug(frameReady);
+  if (scanning) requestAnimationFrame(scanFrame);
 }
 
 async function submitCheckin(token) {
