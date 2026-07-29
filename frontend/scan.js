@@ -134,10 +134,34 @@ let zoomRange = { min: 1, max: MAX_DIGITAL_ZOOM, step: 0.1 };
 let zoomTrack = null;
 let zoomApplyQueued = false;
 
+// getUserMedia fails for several distinct reasons that need different actions
+// from the resident — a single "could not access camera" leaves them (and us)
+// with nothing to go on. Chrome on Android in particular remembers a denied
+// camera permission per-origin forever, so the fix is in site settings, not a
+// retry.
+function cameraErrorMessage(err) {
+  switch (err?.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Camera access is blocked. Tap the icon to the left of the address bar → Permissions → allow Camera, then try again.';
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'Another app is using the camera. Close your camera app (and other browser tabs), then try again.';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'No usable camera found on this device.';
+    default:
+      return 'Could not start the camera. Try again, or reload the page.';
+  }
+}
+
 async function startScan() {
   setMessage(scanMessage, '', '');
   scanButton.disabled = true;
   try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw Object.assign(new Error('unsupported'), { name: 'NotFoundError' });
+    }
     stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: 'environment',
@@ -145,16 +169,23 @@ async function startScan() {
         height: { ideal: CAPTURE_HEIGHT },
       },
     });
+    // Unhide BEFORE play(). Chrome on Android won't start playback on a
+    // display:none element — play() rejects (or never resolves), which used to
+    // land in the catch below and leave the viewport hidden forever, so the
+    // resident saw a bare error with no preview even though the camera had
+    // been granted and opened.
+    scanViewport.classList.remove('hidden');
     video.srcObject = stream;
     await video.play();
     scanning = true;
-    scanViewport.classList.remove('hidden');
     setupZoom();
     scanButton.textContent = 'Stop Camera';
     scanButton.disabled = false;
     requestAnimationFrame(scanFrame);
-  } catch {
-    setMessage(scanMessage, 'Could not access camera.', 'error');
+  } catch (err) {
+    console.error('camera_start_failed', err?.name, err?.message);
+    stopScan();
+    setMessage(scanMessage, cameraErrorMessage(err), 'error');
     scanButton.disabled = false;
   }
 }
@@ -231,7 +262,13 @@ zoomOutButton.addEventListener('click', () => setZoom(zoom - zoomStep()));
 
 function scanFrame() {
   if (!scanning) return;
-  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+  // A live MediaStream is not a buffered file: Chrome on Android commonly holds
+  // readyState at HAVE_CURRENT_DATA and never advertises HAVE_ENOUGH_DATA, so
+  // the old `=== HAVE_ENOUGH_DATA` check spun this loop forever — preview
+  // visible, no frame ever decoded, no error. Decode as soon as there's a frame
+  // to decode, and require real dimensions so the first ticks (videoWidth 0)
+  // don't hand jsQR a zero-sized buffer.
+  if (video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0) {
     // Native zoom already crops in hardware, so only crop here for digital zoom.
     const crop = zoomTrack ? 1 : zoom;
     const sourceWidth = video.videoWidth / crop;
