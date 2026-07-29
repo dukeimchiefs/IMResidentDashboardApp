@@ -13,5 +13,9 @@ database_id = "b989ffda-3604-4f37-a13d-e1c685848f9c"
 # sandbox — this is required for delivery to actual resident @duke.edu
 # inboxes, not just the account owner's own verified address.
 RESEND_FROM = "noreply@nicholasbrazeau.com"
+# An ImprovMX alias forwarding to the program's inbox. A From domain that can't
+# be replied to is penalised by Exchange Online Protection, and residents who
+# hit reply on a no-reply address get silence.
+RESEND_REPLY_TO = "residency@nicholasbrazeau.com"
 TURNSTILE_SITEKEY = "0x4AAAAAAD7jlOk1_ML_5VY1"
 TURNSTILE_HOSTNAME = "imresidentdashboardapp.pages.dev"

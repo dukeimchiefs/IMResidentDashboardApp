@@ -78,6 +78,23 @@ address and only delivered to the account owner's own verified email — real
 to a different domain, re-verify it in Resend first and update `RESEND_FROM` to match,
 or magic links will silently fail to deliver again.
 
+**Deliverability to `@duke.edu`:** Duke's MX is Exchange Online Protection, which scores
+message shape on top of SPF/DKIM. `functions/_lib/resend.js` therefore sends a display
+name on `From`, a `text/plain` alternative alongside the HTML, and body copy that isn't a
+single naked URL — see the comment there before changing any of it. Set the optional
+`RESEND_REPLY_TO` var to a monitored address (a From-domain that can't be replied to is
+penalised); it is set to `residency@nicholasbrazeau.com`, an ImprovMX alias.
+
+DNS state as of 2026-07-29 — the zone is managed in the **Squarespace** domains panel, not
+Google Cloud DNS, despite the `ns-cloud-*.googledomains.com` nameservers being a leftover
+of the Google Domains acquisition. `nicholasbrazeau.com` now publishes MX
+(`mx1`/`mx2.improvmx.com`) so the From domain is replyable, an apex SPF for ImprovMX, and
+`_dmarc` at `p=none` with `rua=mailto:dmarc@nicholasbrazeau.com; fo=1;`. Note the apex SPF
+is *not* consulted for magic links — Resend's envelope sender is `send.nicholasbrazeau.com`,
+which has its own SPF. Remaining: review a week of DMARC aggregate reports, confirm Resend
+mail passes SPF and DKIM, then move `p=none` to `p=quarantine`. The single highest-leverage
+fix is still asking Duke OIT to allowlist the sending domain in the tenant anti-spam policy.
+
 **Free-tier daily cap:** Resend's free plan caps sends at 100/day (3,000/month). If the
 whole residency (~170 people) tries to sign in the same day, some sends will hit that
 cap. `functions/login.js` tracks a same-day send counter in D1 and, once within 10 of
