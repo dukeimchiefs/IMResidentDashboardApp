@@ -5,8 +5,14 @@ compatibility_date = "2026-07-01"
 # Cloudflare Pages Functions cannot run Cron Triggers — scheduled execution
 # requires a standalone Worker, hence this separate deployable. It shares the
 # same D1 database as the main Pages project.
+# Every 3 minutes, not 15: this is the worst-case wait for a resident whose
+# first send hit the daily cap or errored, and 15 minutes of standing at a
+# lecture-room door was too long. COUPLED TO MAX_ATTEMPTS in src/index.js —
+# attempts x cadence is the total window before a queued email is given up on
+# and deleted, so changing this cadence without changing MAX_ATTEMPTS silently
+# shrinks that window.
 [triggers]
-crons = ["*/15 * * * *"]
+crons = ["*/3 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

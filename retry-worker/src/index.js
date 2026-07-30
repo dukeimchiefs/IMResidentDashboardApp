@@ -5,7 +5,14 @@ import { peekDailyCounter, incrementDailyCounter, cleanupExpiredCounters } from 
 
 const RESEND_DAILY_SOFT_CAP = 90; // matches functions/login.js — shared budget, same D1 counter row
 const BATCH_SIZE = 20; // per cron tick, well under Resend's 10 req/sec limit
-const MAX_ATTEMPTS = 10; // give up after this many failed retries for one email
+// Give up after this many failed retries for one email. COUPLED TO THE CRON
+// CADENCE in wrangler.toml: attempts x cadence is how long a queued sign-in
+// email keeps being retried before it's dropped and the resident gets nothing.
+// Raised from 10 when the cadence went from 15 to 3 minutes, so the window stays
+// ~2.5 hours rather than collapsing to 30 minutes. Note that hitting the daily
+// cap does NOT burn an attempt — the loop breaks before markPendingLoginAttempt,
+// so only genuine send failures count against this.
+const MAX_ATTEMPTS = 50;
 
 export default {
   async scheduled(controller, env, ctx) {
