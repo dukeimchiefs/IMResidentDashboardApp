@@ -359,33 +359,30 @@ async function decodeFrame() {
   return code && code.data ? code.data : null;
 }
 
-// ?debug=1 shows which decoder is live, the real stream resolution and the
-// achieved decode rate. Diagnosing this on a resident's Android phone otherwise
-// means remote-debugging their handset; residents never see it without the flag.
+// ?debug=1 logs which decoder is live, the real stream resolution and the
+// achieved decode rate. Console-only and flag-gated: this diagnosed the Android/
+// portrait throughput bug (a 1080x1920 stream decoding at 2M px), and keeping it
+// beats remote-debugging a resident's handset the next time scanning "does
+// nothing" — but it must never put anything on screen during a real check-in.
 const debugEnabled = new URLSearchParams(window.location.search).get('debug') === '1';
-let debugEl = null;
 let debugDecodes = 0;
 let debugStartedAt = 0;
+let debugLoggedAt = 0;
 let debugDetector = 'probing';
 
 function updateDebug(frameReady) {
-  if (!debugEnabled) return;
-  if (!debugEl) {
-    debugEl = document.createElement('pre');
-    debugEl.style.cssText =
-      'font:11px/1.4 ui-monospace,monospace;text-align:left;background:#111;color:#0f0;' +
-      'padding:.5rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap';
-    scanMessage.parentNode.insertBefore(debugEl, scanMessage);
-  }
-  const secs = debugStartedAt ? (performance.now() - debugStartedAt) / 1000 : 0;
-  debugEl.textContent = [
-    `decoder    ${debugDetector}`,
-    `stream     ${video.videoWidth}x${video.videoHeight}`,
-    `readyState ${video.readyState} (frameReady=${frameReady})`,
-    `zoom       ${zoom.toFixed(2)} (${zoomTrack ? 'native' : 'digital'})`,
-    `decodes    ${debugDecodes} in ${secs.toFixed(1)}s = ${secs ? (debugDecodes / secs).toFixed(1) : '0'}/s`,
-    `canvas     ${canvas.width}x${canvas.height}`,
-  ].join('\n');
+  if (!debugEnabled || !debugStartedAt) return;
+  const nowMs = performance.now();
+  // One line per second — every animation frame would flood the console.
+  if (nowMs - debugLoggedAt < 1000) return;
+  debugLoggedAt = nowMs;
+  const secs = (nowMs - debugStartedAt) / 1000;
+  console.log(
+    `scan_debug decoder=${debugDetector} stream=${video.videoWidth}x${video.videoHeight} ` +
+      `canvas=${canvas.width}x${canvas.height} readyState=${video.readyState} ` +
+      `frameReady=${frameReady} zoom=${zoom.toFixed(2)}/${zoomTrack ? 'native' : 'digital'} ` +
+      `decodes=${debugDecodes} rate=${secs ? (debugDecodes / secs).toFixed(1) : '0'}/s`,
+  );
 }
 
 let decodeInFlight = false;
