@@ -142,6 +142,22 @@ const DECODE_INTERVAL_MS = 100;
 // Cameras that expose no zoom capability fall back to cropping the frame.
 const MAX_DIGITAL_ZOOM = 4;
 
+// How long the native detector may run without a single hit before we give up on
+// it and hand the rest of the session to jsQR. The failure this guards against is
+// silent by construction: Chrome on Android downloads the Play Services barcode
+// module on demand, and until it lands getSupportedFormats() already advertises
+// 'qr_code' while detect() just resolves [] forever. Nothing throws, so the
+// catch-based demotion in decodeFrame() never fires -- preview running, decode
+// rate healthy, no error, and the code never reads. Generous enough that a
+// resident lining a QR up normally is never demoted off the fast path.
+const NATIVE_PROBATION_MS = 6000;
+
+// How long to scan with nothing decoded before saying something to the resident.
+// Silence is the one outcome this scanner must never produce: it is
+// indistinguishable from a broken app, which is exactly how the bug above got
+// reported ("the camera doesn't recognise the code").
+const NO_DECODE_HINT_MS = 12000;
+
 let zoom = 1;
 let zoomRange = { min: 1, max: MAX_DIGITAL_ZOOM, step: 0.1 };
 // Set when the camera can zoom optically/natively; null means digital cropping.
@@ -197,6 +213,9 @@ async function startScan() {
     scanButton.disabled = false;
     debugDecodes = 0;
     debugStartedAt = performance.now();
+    scanStartedAt = debugStartedAt;
+    noDecodeHintShown = false;
+    nativeProbationStart = 0;
     lastDecodeAt = 0;
     requestAnimationFrame(scanFrame);
   } catch (err) {
@@ -306,6 +325,19 @@ function getDetector() {
   return detectorPromise;
 }
 
+// Timestamp of the first native decode attempt in the current scan session, or 0
+// once the detector has proved itself by finding something. Reset per startScan
+// so a detector that works is never demoted because of an earlier session.
+let nativeProbationStart = 0;
+
+// Permanently hand the rest of the session to jsQR. Slower, but a working slow
+// decoder beats a fast one that silently returns nothing.
+function demoteDetector(reason) {
+  detectorPromise = Promise.resolve(null);
+  debugDetector = `jsQR (demoted: ${reason})`;
+  console.warn('barcode_detector_demoted', reason);
+}
+
 // Draws the current frame into `canvas`, honouring digital zoom, and returns the
 // 2d context. maxEdge caps the longest side; 0 means full resolution.
 function drawFrame(maxEdge) {
@@ -342,12 +374,31 @@ async function decodeFrame() {
     try {
       const codes = await detector.detect(source);
       const hit = codes.find((c) => c.rawValue);
-      return hit ? hit.rawValue : null;
-    } catch {
+      if (hit) {
+        nativeProbationStart = 0; // proved it works; never demote this session
+        return hit.rawValue;
+      }
+      // An empty result is ambiguous -- no QR in frame, or a detector that will
+      // never return one. Only the passage of time separates them, so start a
+      // clock on the first miss and fall through to jsQR once it runs out.
+      const nowMs = performance.now();
+      if (!nativeProbationStart) nativeProbationStart = nowMs;
+      if (nowMs - nativeProbationStart < NATIVE_PROBATION_MS) return null;
+      demoteDetector(`no hit in ${Math.round(NATIVE_PROBATION_MS / 1000)}s`);
+    } catch (err) {
       // Some Android builds expose BarcodeDetector but throw on detect(). Demote
       // to jsQR for the rest of the session rather than wedging the scanner.
-      detectorPromise = Promise.resolve(null);
+      demoteDetector(`detect() threw ${err?.name}`);
     }
+  }
+  if (typeof jsQR !== 'function') {
+    // jsQR is a CDN script (see index.html). A network that blocks
+    // cdn.jsdelivr.net never defines it, and with no usable BarcodeDetector that
+    // leaves no decoder at all. This used to throw a bare ReferenceError every
+    // frame into scanFrame()'s catch, which logged it and kept looping: preview
+    // up, nothing decoded, not a word to the resident. Name it so the caller can
+    // stop and say so.
+    throw Object.assign(new Error('jsQR unavailable'), { name: 'DecoderUnavailableError' });
   }
   const ctx = drawFrame(MAX_JSQR_EDGE);
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -387,6 +438,22 @@ function updateDebug(frameReady) {
 
 let decodeInFlight = false;
 let lastDecodeAt = 0;
+let scanStartedAt = 0;
+let noDecodeHintShown = false;
+
+// Break the silence after NO_DECODE_HINT_MS of scanning with nothing decoded.
+// Deliberately not styled as an error -- most of the time the camera is simply
+// too far from the code, and this is the nudge that fixes it. Shown once, then
+// replaced by the real result the moment anything decodes.
+function maybeHintNoDecode(now) {
+  if (noDecodeHintShown || !scanStartedAt || now - scanStartedAt < NO_DECODE_HINT_MS) return;
+  noDecodeHintShown = true;
+  setMessage(
+    scanMessage,
+    'Still looking for a code — move closer, hold steady, and keep the whole square in frame.',
+    ''
+  );
+}
 
 async function scanFrame(now) {
   if (!scanning) return;
@@ -411,7 +478,20 @@ async function scanFrame(now) {
         submitCheckin(data);
         return;
       }
+      maybeHintNoDecode(now);
     } catch (err) {
+      if (err?.name === 'DecoderUnavailableError') {
+        // No decoder exists at all, so every further frame is wasted work and
+        // the resident would sit in front of a live preview forever. Stop and
+        // say so instead.
+        stopScan();
+        setMessage(
+          scanMessage,
+          'The QR scanner failed to load. Check your network connection, then reload the page.',
+          'error'
+        );
+        return;
+      }
       // An exception here used to kill the rAF loop outright, which looked
       // exactly like "the app does nothing" — keep looping, but leave a trace.
       console.error('decode_failed', err?.name, err?.message);

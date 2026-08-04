@@ -54,7 +54,19 @@ export async function onRequestPost({ request, env }) {
         renewal
       );
     }
-    return json({ ok: false, error: 'invalid_token' }, 400, renewal);
+    // Carries its own message rather than letting the client fall back to a
+    // generic "Check-in failed" — that wording is indistinguishable from a
+    // network error or a camera that never read anything, which sent a real
+    // diagnosis down the wrong path. Say that the code *was* read and rejected.
+    return json(
+      {
+        ok: false,
+        error: 'invalid_token',
+        message: "That code was scanned but isn't a valid check-in code. Make sure you're scanning the code on the screen, not a photo of an older one.",
+      },
+      400,
+      renewal
+    );
   }
 
   const eventInfo = EVENT_TYPES[result.type];
