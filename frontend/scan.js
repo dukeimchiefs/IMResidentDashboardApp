@@ -335,6 +335,7 @@ let nativeProbationStart = 0;
 function demoteDetector(reason) {
   detectorPromise = Promise.resolve(null);
   debugDetector = `jsQR (demoted: ${reason})`;
+  debugNote = `demoted: ${reason}`;
   console.warn('barcode_detector_demoted', reason);
 }
 
@@ -410,16 +411,59 @@ async function decodeFrame() {
   return code && code.data ? code.data : null;
 }
 
-// ?debug=1 logs which decoder is live, the real stream resolution and the
-// achieved decode rate. Console-only and flag-gated: this diagnosed the Android/
-// portrait throughput bug (a 1080x1920 stream decoding at 2M px), and keeping it
-// beats remote-debugging a resident's handset the next time scanning "does
-// nothing" — but it must never put anything on screen during a real check-in.
+// Bump on every scanner change that needs verifying on a handset. Shown in the
+// ?debug=1 readout so "is the fix actually live on this phone?" is answered by
+// looking at the screen, instead of by trusting that a reload picked up new JS.
+const SCAN_BUILD = '2026-08-04c';
+
+// ?debug=1 reports which decoder is live, the real stream resolution and the
+// achieved decode rate. It diagnosed the Android/portrait throughput bug (a
+// 1080x1920 stream decoding at 2M px).
+//
+// f0dc650 moved this readout into the console alone, on the grounds that it must
+// never appear during a real check-in. That still holds — but console-only means
+// reading it requires chrome://inspect from a laptop, and that barrier is exactly
+// what left a live scanner undiagnosable on the one device that reproduces the
+// bug. So it renders on screen *and* logs, both strictly behind the flag; a
+// resident checking in never has the flag, so nothing leaks into normal use.
 const debugEnabled = new URLSearchParams(window.location.search).get('debug') === '1';
 let debugDecodes = 0;
 let debugStartedAt = 0;
 let debugLoggedAt = 0;
 let debugDetector = 'probing';
+let debugNote = '';
+let debugEl = null;
+
+// A camera that is running but handing back black or flat frames decodes nothing
+// and looks identical on screen to a code the scanner simply can't read. Sampling
+// the luminance spread separates the two: a real QR in frame spans nearly the
+// full range, while a black or washed-out frame collapses to almost none. Uses
+// its own tiny canvas so it can never race the decode path's shared one.
+let probeCanvas = null;
+
+function frameBrightness() {
+  if (!video.videoWidth) return null;
+  if (!probeCanvas) probeCanvas = document.createElement('canvas');
+  probeCanvas.width = 48;
+  probeCanvas.height = 48;
+  const ctx = probeCanvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, 48, 48);
+  const { data } = ctx.getImageData(0, 0, 48, 48);
+  let min = 255;
+  let max = 0;
+  let sum = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+    if (lum < min) min = lum;
+    if (lum > max) max = lum;
+    sum += lum;
+  }
+  return {
+    mean: Math.round(sum / (data.length / 4)),
+    min: Math.round(min),
+    max: Math.round(max),
+  };
+}
 
 function updateDebug(frameReady) {
   if (!debugEnabled || !debugStartedAt) return;
@@ -428,12 +472,39 @@ function updateDebug(frameReady) {
   if (nowMs - debugLoggedAt < 1000) return;
   debugLoggedAt = nowMs;
   const secs = (nowMs - debugStartedAt) / 1000;
+  const rate = secs ? (debugDecodes / secs).toFixed(1) : '0';
+  const lum = frameBrightness();
+  const lumText = lum ? `mean=${lum.mean} min=${lum.min} max=${lum.max} spread=${lum.max - lum.min}` : 'n/a';
+
   console.log(
-    `scan_debug decoder=${debugDetector} stream=${video.videoWidth}x${video.videoHeight} ` +
-      `canvas=${canvas.width}x${canvas.height} readyState=${video.readyState} ` +
-      `frameReady=${frameReady} zoom=${zoom.toFixed(2)}/${zoomTrack ? 'native' : 'digital'} ` +
-      `decodes=${debugDecodes} rate=${secs ? (debugDecodes / secs).toFixed(1) : '0'}/s`,
+    `scan_debug build=${SCAN_BUILD} decoder=${debugDetector} ` +
+      `stream=${video.videoWidth}x${video.videoHeight} canvas=${canvas.width}x${canvas.height} ` +
+      `readyState=${video.readyState} frameReady=${frameReady} ` +
+      `zoom=${zoom.toFixed(2)}/${zoomTrack ? 'native' : 'digital'} ` +
+      `decodes=${debugDecodes} rate=${rate}/s frame=${lumText}` +
+      (debugNote ? ` note=${debugNote}` : ''),
   );
+
+  if (!debugEl) {
+    debugEl = document.createElement('pre');
+    debugEl.style.cssText =
+      'font:11px/1.4 ui-monospace,monospace;text-align:left;background:#111;color:#0f0;' +
+      'padding:.5rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap';
+    scanMessage.parentNode.insertBefore(debugEl, scanMessage);
+  }
+  debugEl.textContent = [
+    `build      ${SCAN_BUILD}`,
+    `decoder    ${debugDetector}`,
+    `stream     ${video.videoWidth}x${video.videoHeight}`,
+    `canvas     ${canvas.width}x${canvas.height}`,
+    `readyState ${video.readyState} (frameReady=${frameReady})`,
+    `zoom       ${zoom.toFixed(2)} (${zoomTrack ? 'native' : 'digital'})`,
+    `decodes    ${debugDecodes} in ${secs.toFixed(1)}s = ${rate}/s`,
+    `frame      ${lumText}`,
+    debugNote ? `note       ${debugNote}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 let decodeInFlight = false;
@@ -494,6 +565,7 @@ async function scanFrame(now) {
       }
       // An exception here used to kill the rAF loop outright, which looked
       // exactly like "the app does nothing" — keep looping, but leave a trace.
+      debugNote = `decode_failed: ${err?.name}`;
       console.error('decode_failed', err?.name, err?.message);
     } finally {
       decodeInFlight = false;
