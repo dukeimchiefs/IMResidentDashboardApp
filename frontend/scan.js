@@ -414,7 +414,7 @@ async function decodeFrame() {
 // Bump on every scanner change that needs verifying on a handset. Shown in the
 // ?debug=1 readout so "is the fix actually live on this phone?" is answered by
 // looking at the screen, instead of by trusting that a reload picked up new JS.
-const SCAN_BUILD = '2026-08-04c';
+const SCAN_BUILD = '2026-08-04d';
 
 // ?debug=1 reports which decoder is live, the real stream resolution and the
 // achieved decode rate. It diagnosed the Android/portrait throughput bug (a
@@ -524,6 +524,20 @@ function maybeHintNoDecode(now) {
     'Still looking for a code — move closer, hold steady, and keep the whole square in frame.',
     ''
   );
+
+  // A compact technical line under the hint. It renders only after 12s of failed
+  // scanning — a state that is already a failure, and where the alternative is a
+  // resident reporting "it doesn't work" with nothing to act on. ?debug=1 gives
+  // the full readout, but that URL has to be typed correctly on a phone
+  // keyboard, and when it isn't there is no diagnosis at all. This needs nothing
+  // typed.
+  const secs = (now - scanStartedAt) / 1000;
+  const detail = document.createElement('div');
+  detail.style.cssText = 'margin-top:.4rem;font:11px/1.4 ui-monospace,monospace;opacity:.6';
+  detail.textContent =
+    `${SCAN_BUILD} · ${debugDetector} · ${video.videoWidth}x${video.videoHeight} · ` +
+    `${secs ? (debugDecodes / secs).toFixed(1) : '0'}/s`;
+  scanMessage.appendChild(detail);
 }
 
 async function scanFrame(now) {
