@@ -128,6 +128,27 @@ const MAX_SCAN_WIDTH = 1280;
 // Cameras that expose no zoom capability fall back to cropping the frame.
 const MAX_DIGITAL_ZOOM = 4;
 
+// Bump on every scanner change that needs confirming on a handset. Reported in
+// the stall readout below, so "is this phone running the new code?" is answered
+// by looking at the screen rather than by trusting that a reload took.
+const SCAN_BUILD = '2026-08-04e';
+
+// How long to scan with nothing decoded before reporting what the scanner is
+// actually doing. Silence reads exactly like a broken app, and every round of
+// "it doesn't work" so far has cost a deploy to learn one number.
+const STALL_REPORT_MS = 12000;
+
+// What the camera actually gave us, as opposed to what was asked for. Every
+// browser honours these constraints differently — notably iOS Chrome, which
+// routes through its own camera layer rather than Safari's — so a stream that
+// came back tiny, or from the front camera despite facingMode 'environment',
+// is invisible without reading it back off the track.
+let cameraLabel = '';
+let cameraFacing = '';
+let scanStartedAt = 0;
+let decodeAttempts = 0;
+let stallReported = false;
+
 let zoom = 1;
 let zoomRange = { min: 1, max: MAX_DIGITAL_ZOOM, step: 0.1 };
 // Set when the camera can zoom optically/natively; null means digital cropping.
@@ -179,6 +200,22 @@ async function startScan() {
     await video.play();
     scanning = true;
     setupZoom();
+
+    // Read back what we were actually given. track.label names the physical
+    // camera on iOS ("Back Camera" / "Front Camera"), which settles the
+    // wrong-camera case outright.
+    const activeTrack = stream.getVideoTracks()[0];
+    const settings = typeof activeTrack?.getSettings === 'function' ? activeTrack.getSettings() : {};
+    cameraLabel = activeTrack?.label || 'unnamed';
+    cameraFacing = settings.facingMode || 'unreported';
+    console.log(
+      'camera_started', SCAN_BUILD, cameraLabel, cameraFacing,
+      `${settings.width || '?'}x${settings.height || '?'}`,
+    );
+
+    scanStartedAt = performance.now();
+    decodeAttempts = 0;
+    stallReported = false;
     scanButton.textContent = 'Stop Camera';
     scanButton.disabled = false;
     requestAnimationFrame(scanFrame);
@@ -287,13 +324,39 @@ function scanFrame() {
     );
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const code = jsQR(imageData.data, imageData.width, imageData.height);
+    decodeAttempts += 1;
     if (code && code.data) {
       stopScan();
       submitCheckin(code.data);
       return;
     }
+    reportStall();
   }
   requestAnimationFrame(scanFrame);
+}
+
+// After STALL_REPORT_MS of decoding nothing, say so and show what the camera
+// handed back. Shown once per scan and only in a state that has already failed,
+// so a normal check-in never sees it. The technical line is what turns "it
+// doesn't work" into something actionable without wiring the phone to a laptop.
+function reportStall() {
+  if (stallReported || !scanStartedAt) return;
+  const elapsed = performance.now() - scanStartedAt;
+  if (elapsed < STALL_REPORT_MS) return;
+  stallReported = true;
+
+  setMessage(
+    scanMessage,
+    'Still looking for a code — move closer, hold steady, and keep the whole square in frame.',
+    ''
+  );
+  const detail = document.createElement('div');
+  detail.style.cssText = 'margin-top:.4rem;font:11px/1.4 ui-monospace,monospace;opacity:.6';
+  detail.textContent =
+    `${SCAN_BUILD} · ${cameraLabel} (${cameraFacing}) · ` +
+    `${video.videoWidth}x${video.videoHeight} → ${canvas.width}x${canvas.height} · ` +
+    `${(decodeAttempts / (elapsed / 1000)).toFixed(1)}/s`;
+  scanMessage.appendChild(detail);
 }
 
 async function submitCheckin(token) {
