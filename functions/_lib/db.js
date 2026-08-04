@@ -1,5 +1,5 @@
 export async function getRosterEntry(db, email) {
-  return db.prepare('SELECT email, name FROM roster WHERE email = ?').bind(email).first();
+  return db.prepare('SELECT email, name, test_account FROM roster WHERE email = ?').bind(email).first();
 }
 
 export async function insertMagicLink(db, token, email, expiresAt) {

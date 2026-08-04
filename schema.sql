@@ -1,6 +1,12 @@
 CREATE TABLE roster (
   email TEXT PRIMARY KEY,
-  name TEXT NOT NULL
+  name TEXT NOT NULL,
+  -- Debug accounts. Their scans validate the QR and report success but never
+  -- write an attendance row, so testing the scanner cannot inflate anyone's
+  -- totals or consume a once-per-resident event. Set per row in the database and
+  -- deliberately never listed in code: this repository is public, and a
+  -- hardcoded allowlist would publish the addresses on it.
+  test_account INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE magic_links (

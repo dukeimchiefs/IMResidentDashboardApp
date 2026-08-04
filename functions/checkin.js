@@ -70,6 +70,31 @@ export async function onRequestPost({ request, env }) {
   }
 
   const eventInfo = EVENT_TYPES[result.type];
+
+  // Debug accounts stop here. Everything that proves the scanner works has
+  // already run — the QR was decoded, validated against the secret and resolved
+  // to an event — so the response confirms a real success without writing an
+  // attendance row. Scanning the same code repeatedly while working on the
+  // camera therefore can't accrue points, distort the leaderboard, or burn a
+  // once-per-resident event like welcome.
+  //
+  // The flag lives on the roster row rather than in an allowlist here because
+  // this repository is public; a hardcoded address would be published with it.
+  if (rosterEntry.test_account) {
+    return json(
+      {
+        ok: true,
+        testAccount: true,
+        eventType: eventInfo.dbValue,
+        eventLabel: eventInfo.label,
+        name: rosterEntry.name,
+        message: `Scan OK — ${eventInfo.label}. Test account, attendance not recorded.`,
+      },
+      200,
+      renewal
+    );
+  }
+
   const eventDate = todayET();
   const onceEver = isOncePerResident(result.type);
 

@@ -1,0 +1,14 @@
+-- Adds the roster.test_account flag. Scans from a flagged account validate the
+-- QR and report success but never write an attendance row, so debugging the
+-- scanner cannot inflate anyone's totals or consume a once-per-resident event.
+--
+-- Adding the column only. Which addresses are flagged is set separately, with a
+-- direct UPDATE against the deployed database, and is intentionally absent from
+-- this file and from the rest of the repository — both are public.
+--
+--   wrangler d1 execute attendance-db --remote \
+--     --command "UPDATE roster SET test_account = 1 WHERE email = '<address>';"
+--
+-- SQLite's ALTER TABLE ADD COLUMN cannot be made conditional, so re-running this
+-- migration errors with "duplicate column name". That is harmless.
+ALTER TABLE roster ADD COLUMN test_account INTEGER NOT NULL DEFAULT 0;

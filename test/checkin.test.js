@@ -8,7 +8,9 @@ import { MULTI_DAY_WINDOWS } from '../functions/_lib/eventTypes.js';
 
 const SESSION_SECRET = 'test-session-secret';
 const QR_SECRET = 'test-qr-secret';
-const RESIDENT = { email: 'resident@duke.edu', name: 'Test Resident' };
+const RESIDENT = { email: 'resident@duke.edu', name: 'Test Resident', test_account: 0 };
+// A roster entry flagged for debugging: scans validate but are never recorded.
+const TESTER = { email: 'tester@duke.edu', name: 'Scanner Debugger', test_account: 1 };
 
 // Minimal D1 stand-in: enough of the attendance table to exercise the real
 // dedupe path, dispatching on SQL text rather than parsing it. Enforces both
@@ -28,8 +30,8 @@ function fakeDb(rows = []) {
         },
         async first() {
           if (sql.includes('rate_limit_counters')) return { count: 1 };
-          if (sql.startsWith('SELECT email, name FROM roster')) {
-            return stmt.args[0] === RESIDENT.email ? { ...RESIDENT } : null;
+          if (sql.startsWith('SELECT email, name, test_account FROM roster')) {
+            return [RESIDENT, TESTER].find((r) => r.email === stmt.args[0]) ?? null;
           }
           if (sql.includes('FROM attendance WHERE email = ? AND event_type = ?')) {
             const [email, type] = stmt.args;
@@ -63,12 +65,12 @@ function fakeDb(rows = []) {
   };
 }
 
-async function scan(db, qrType, tokenDate) {
+async function scan(db, qrType, tokenDate, identity = RESIDENT) {
   const token = `${qrType}:${await computeDailyToken(QR_SECRET, tokenDate, qrType)}`;
   const request = new Request('https://example.test/checkin', {
     method: 'POST',
     headers: {
-      cookie: (await createSessionCookie(SESSION_SECRET, RESIDENT)).split(';')[0],
+      cookie: (await createSessionCookie(SESSION_SECRET, identity)).split(';')[0],
       'content-type': 'application/json',
     },
     body: JSON.stringify({ token }),
@@ -154,3 +156,57 @@ function weekAnchorForToday() {
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 1) % 7));
   return d.toISOString().slice(0, 10);
 }
+
+test('a test account scans successfully without recording attendance', async () => {
+  const db = fakeDb();
+  const { status, body } = await scan(db, 'noon', weekAnchorForToday(), TESTER);
+  assert.equal(status, 200);
+  assert.equal(body.ok, true, 'the scan must still report success — that is what is being debugged');
+  assert.equal(body.testAccount, true);
+  assert.equal(body.eventLabel, 'Noon Conference', 'the QR must still resolve to a real event');
+  assert.match(body.message, /not recorded/);
+  assert.equal(db.attendance.length, 0, 'no attendance row may be written');
+});
+
+test('a test account can scan the same code without limit', async () => {
+  const db = fakeDb();
+  for (let i = 0; i < 5; i++) {
+    const { status, body } = await scan(db, 'noon', weekAnchorForToday(), TESTER);
+    assert.equal(status, 200, `scan ${i + 1} should succeed`);
+    assert.equal(body.ok, true);
+  }
+  assert.equal(db.attendance.length, 0);
+});
+
+test('a test account does not consume its once-per-resident welcome', async () => {
+  const db = fakeDb();
+  await scan(db, 'welcome', WELCOME_ANCHOR, TESTER);
+  await scan(db, 'welcome', WELCOME_ANCHOR, TESTER);
+  const { status, body } = await scan(db, 'welcome', WELCOME_ANCHOR, TESTER);
+  assert.equal(status, 200, 'welcome must never lock out a debug account');
+  assert.equal(body.ok, true);
+  assert.equal(db.attendance.length, 0);
+});
+
+test('a test account still has its QR validated, not waved through', async () => {
+  const db = fakeDb();
+  const request = new Request('https://example.test/checkin', {
+    method: 'POST',
+    headers: {
+      cookie: (await createSessionCookie(SESSION_SECRET, TESTER)).split(';')[0],
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ token: 'noon:0000000000000000' }),
+  });
+  const response = await onRequestPost({ request, env: { DB: db, SESSION_SECRET, QR_SECRET } });
+  assert.equal(response.status, 400, 'a bad token must fail for a test account too');
+  assert.equal((await response.json()).ok, false);
+});
+
+test('an ordinary resident is unaffected and still records attendance', async () => {
+  const db = fakeDb();
+  const { status, body } = await scan(db, 'noon', weekAnchorForToday());
+  assert.equal(status, 200);
+  assert.equal(body.testAccount, undefined);
+  assert.equal(db.attendance.length, 1, 'real residents must still be recorded');
+});
