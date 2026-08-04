@@ -36,6 +36,18 @@ export async function hasCheckedIn(db, email, eventDate, eventType) {
   return !!row;
 }
 
+// Date-independent variant of hasCheckedIn, for ONCE_PER_RESIDENT event types
+// (see functions/_lib/eventTypes.js). Their QR has no expiry, so the only thing
+// stopping a resident scanning the same onboarding poster again next week is
+// this check plus the partial UNIQUE index backing it.
+export async function hasEverCheckedIn(db, email, eventType) {
+  const row = await db
+    .prepare('SELECT 1 FROM attendance WHERE email = ? AND event_type = ?')
+    .bind(email, eventType)
+    .first();
+  return !!row;
+}
+
 // Returns true on success, false if a UNIQUE constraint violation occurred
 // (race-condition safety net for concurrent double-taps of the same event).
 export async function insertAttendance(db, { name, email, eventType, eventDate, timestamp }) {

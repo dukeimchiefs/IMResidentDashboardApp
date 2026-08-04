@@ -20,9 +20,13 @@ EVENT_TYPES = ["noon", "learning", "grandrounds"]
 WEEKLY_TYPES = {"noon", "learning", "grandrounds"}
 
 # Event types whose QR is a single static image valid across a multi-day window
-# instead of rotating daily. Must mirror MULTI_DAY_WINDOWS in functions/_lib/eventTypes.js.
+# instead of rotating daily. valid_days None means the window never closes, so the
+# generated PNG stays scannable forever and never needs regenerating — the Worker
+# caps those types at one check-in per resident instead (ONCE_PER_RESIDENT).
+# Only anchor_date is read here; valid_days is mirrored for parity with the
+# Worker. Must mirror MULTI_DAY_WINDOWS in functions/_lib/eventTypes.js.
 MULTI_DAY_WINDOWS = {
-    "welcome": {"anchor_date": "2026-07-17", "valid_days": 21},
+    "welcome": {"anchor_date": "2026-07-17", "valid_days": None},
 }
 
 TOKEN_HEX_LENGTH = 16  # must match TOKEN_HEX_LENGTH in functions/_lib/token.js

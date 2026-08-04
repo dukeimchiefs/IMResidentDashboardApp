@@ -1,7 +1,7 @@
-import { hasCheckedIn, insertAttendance, getRosterEntry } from './_lib/db.js';
+import { hasCheckedIn, hasEverCheckedIn, insertAttendance, getRosterEntry } from './_lib/db.js';
 import { verifySession, sessionRenewalHeaders } from './_lib/auth.js';
 import { validateScannedPayload, todayET } from './_lib/token.js';
-import { EVENT_TYPES } from './_lib/eventTypes.js';
+import { EVENT_TYPES, isOncePerResident } from './_lib/eventTypes.js';
 import { json } from './_lib/http.js';
 import { checkFixedWindow } from './_lib/rateLimit.js';
 
@@ -71,8 +71,21 @@ export async function onRequestPost({ request, env }) {
 
   const eventInfo = EVENT_TYPES[result.type];
   const eventDate = todayET();
+  const onceEver = isOncePerResident(result.type);
 
-  const alreadyChecked = await hasCheckedIn(env.DB, rosterEntry.email, eventDate, eventInfo.dbValue);
+  // Once-per-resident types dedupe across every date, not just today: their QR
+  // never rotates, so a date-scoped check would let the same onboarding poster
+  // mint a fresh row for the same resident every morning.
+  const alreadyChecked = onceEver
+    ? await hasEverCheckedIn(env.DB, rosterEntry.email, eventInfo.dbValue)
+    : await hasCheckedIn(env.DB, rosterEntry.email, eventDate, eventInfo.dbValue);
+
+  // "today" would be actively misleading for a once-ever type — the resident's
+  // earlier check-in may well have been weeks ago.
+  const duplicateMessage = onceEver
+    ? `You're already checked in to ${eventInfo.label}, ${rosterEntry.name} — you only need to do this once.`
+    : `You already checked in to ${eventInfo.label} today.`;
+
   if (alreadyChecked) {
     return json(
       {
@@ -80,7 +93,7 @@ export async function onRequestPost({ request, env }) {
         error: 'already_checked_in',
         eventType: eventInfo.dbValue,
         eventLabel: eventInfo.label,
-        message: `You already checked in to ${eventInfo.label} today.`,
+        message: duplicateMessage,
       },
       409,
       renewal
@@ -96,14 +109,16 @@ export async function onRequestPost({ request, env }) {
   });
 
   if (!inserted) {
-    // Lost a race to a concurrent request for the same (email, date, event_type).
+    // Lost a race to a concurrent request for the same (email, date, event_type)
+    // — or, for a once-per-resident type, for the same (email, event_type) on
+    // any date, which the partial UNIQUE index in schema.sql rejects.
     return json(
       {
         ok: false,
         error: 'already_checked_in',
         eventType: eventInfo.dbValue,
         eventLabel: eventInfo.label,
-        message: `You already checked in to ${eventInfo.label} today.`,
+        message: duplicateMessage,
       },
       409,
       renewal

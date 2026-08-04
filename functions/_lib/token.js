@@ -113,9 +113,11 @@ export async function validateScannedPayload(secret, payload, dateStr = todayET(
   if (!parsed) return { valid: false };
 
   const window = MULTI_DAY_WINDOWS[parsed.type];
+  // validDays === null is an open-ended window: only the anchor's lower bound
+  // applies, so the code never rotates out from under a printed sign.
   const outOfWindow = window
     && (dateStr < window.anchorDate
-      || dateStr >= addDaysToDateStr(window.anchorDate, window.validDays));
+      || (window.validDays !== null && dateStr >= addDaysToDateStr(window.anchorDate, window.validDays)));
 
   if (!outOfWindow) {
     // Fixed-window types use their own anchor, weekly lecture types use the

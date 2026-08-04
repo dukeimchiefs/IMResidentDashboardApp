@@ -23,6 +23,14 @@ CREATE TABLE attendance (
 CREATE INDEX idx_attendance_date_type ON attendance (event_date, event_type);
 CREATE INDEX idx_attendance_email ON attendance (email);
 
+-- Onboarding happens once per resident, ever. The table's UNIQUE constraint is
+-- scoped to a single event_date, which is the right rule for recurring lectures
+-- but not for 'welcome': its QR has no expiry (MULTI_DAY_WINDOWS.welcome sets
+-- validDays: null), so without this a resident could rescan the same poster for
+-- a new row every day. Mirrors ONCE_PER_RESIDENT in functions/_lib/eventTypes.js
+-- — adding a type there needs a matching partial index here.
+CREATE UNIQUE INDEX idx_attendance_welcome_once ON attendance (email) WHERE event_type = 'welcome';
+
 -- Admin-visible log of /login attempts for emails not found in the roster.
 -- `email` stores only a masked hint (first character + domain), never the full
 -- submitted address. Resident-facing responses remain generic to avoid
