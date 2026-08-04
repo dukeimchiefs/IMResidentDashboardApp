@@ -131,12 +131,14 @@ const MAX_DIGITAL_ZOOM = 4;
 // Bump on every scanner change that needs confirming on a handset. Reported in
 // the stall readout below, so "is this phone running the new code?" is answered
 // by looking at the screen rather than by trusting that a reload took.
-const SCAN_BUILD = '2026-08-04e';
+const SCAN_BUILD = '2026-08-04f';
 
 // How long to scan with nothing decoded before reporting what the scanner is
 // actually doing. Silence reads exactly like a broken app, and every round of
-// "it doesn't work" so far has cost a deploy to learn one number.
-const STALL_REPORT_MS = 12000;
+// "it doesn't work" so far has cost a deploy to learn one number. Short enough
+// that nobody has to wait for it deliberately; a scan that is going to succeed
+// lands well inside it, so a normal check-in still never sees it.
+const STALL_REPORT_MS = 4000;
 
 // What the camera actually gave us, as opposed to what was asked for. Every
 // browser honours these constraints differently — notably iOS Chrome, which
@@ -145,6 +147,7 @@ const STALL_REPORT_MS = 12000;
 // is invisible without reading it back off the track.
 let cameraLabel = '';
 let cameraFacing = '';
+let cameraExactRejected = false;
 let scanStartedAt = 0;
 let decodeAttempts = 0;
 let stallReported = false;
@@ -176,6 +179,31 @@ function cameraErrorMessage(err) {
   }
 }
 
+// `facingMode: 'environment'` is only a preference — a browser is free to hand
+// back the front camera and still be conformant. iOS Chrome reaches the camera
+// through its own layer rather than Safari's, and a front-facing stream there
+// looks exactly like the failure being chased: preview live, nothing decoded,
+// no error, because the code was never in shot.
+//
+// `exact` turns that from a silent wrong answer into an OverconstrainedError we
+// can see. Only that error (or a device with no rear camera at all) falls back
+// to the old soft hint — a denied permission must keep propagating so
+// cameraErrorMessage() can explain it.
+async function openCamera() {
+  cameraExactRejected = false;
+  const size = { width: { ideal: CAPTURE_WIDTH }, height: { ideal: CAPTURE_HEIGHT } };
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: { ...size, facingMode: { exact: 'environment' } },
+    });
+  } catch (err) {
+    if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') throw err;
+    console.warn('camera_exact_environment_rejected', err?.name);
+    cameraExactRejected = true;
+    return navigator.mediaDevices.getUserMedia({ video: { ...size, facingMode: 'environment' } });
+  }
+}
+
 async function startScan() {
   setMessage(scanMessage, '', '');
   scanButton.disabled = true;
@@ -183,13 +211,7 @@ async function startScan() {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw Object.assign(new Error('unsupported'), { name: 'NotFoundError' });
     }
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: 'environment',
-        width: { ideal: CAPTURE_WIDTH },
-        height: { ideal: CAPTURE_HEIGHT },
-      },
-    });
+    stream = await openCamera();
     // Unhide BEFORE play(). Chrome on Android won't start playback on a
     // display:none element — play() rejects (or never resolves), which used to
     // land in the catch below and leave the viewport hidden forever, so the
@@ -350,12 +372,30 @@ function reportStall() {
     'Still looking for a code — move closer, hold steady, and keep the whole square in frame.',
     ''
   );
+  // Luminance spread over the frame just decoded. A camera that is running but
+  // handing back black or washed-out frames decodes nothing and looks identical
+  // on screen to a code that simply cannot be read; a real QR in shot spans
+  // nearly the full range, so a collapsed spread separates the two.
+  let spread = 'n/a';
+  try {
+    const d = canvas.getContext('2d', { willReadFrequently: true })
+      .getImageData(0, 0, canvas.width, canvas.height).data;
+    let min = 255;
+    let max = 0;
+    for (let i = 0; i < d.length; i += 4 * 97) { // sparse stride; this runs once
+      const lum = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+      if (lum < min) min = lum;
+      if (lum > max) max = lum;
+    }
+    spread = `${Math.round(max - min)}`;
+  } catch { /* tainted or zero-sized canvas — leave as n/a */ }
+
   const detail = document.createElement('div');
   detail.style.cssText = 'margin-top:.4rem;font:11px/1.4 ui-monospace,monospace;opacity:.6';
   detail.textContent =
-    `${SCAN_BUILD} · ${cameraLabel} (${cameraFacing}) · ` +
+    `${SCAN_BUILD} · ${cameraLabel} (${cameraFacing}${cameraExactRejected ? ', soft' : ''}) · ` +
     `${video.videoWidth}x${video.videoHeight} → ${canvas.width}x${canvas.height} · ` +
-    `${(decodeAttempts / (elapsed / 1000)).toFixed(1)}/s`;
+    `spread ${spread} · ${(decodeAttempts / (elapsed / 1000)).toFixed(1)}/s`;
   scanMessage.appendChild(detail);
 }
 
