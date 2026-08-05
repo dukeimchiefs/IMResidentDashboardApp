@@ -131,7 +131,7 @@ const MAX_DIGITAL_ZOOM = 4;
 // Bump on every scanner change that needs confirming on a handset. Reported in
 // the stall readout below, so "is this phone running the new code?" is answered
 // by looking at the screen rather than by trusting that a reload took.
-const SCAN_BUILD = '2026-08-04g';
+const SCAN_BUILD = '2026-08-04h';
 
 // How long to scan with nothing decoded before reporting what the scanner is
 // actually doing. Silence reads exactly like a broken app, and every round of
@@ -156,6 +156,39 @@ const NATIVE_PROBATION_MS = 6000;
 let nativeProbationStart = 0;
 let decodeInFlight = false;
 let activeDecoder = 'probing';
+
+// A frame whose luminance range is narrower than this carries no image. A real
+// scene spans most of 0-255; a blank one collapses to near nothing.
+//
+// This is the WKWebView failure mode: on iOS every browser renders video in a
+// compositing layer, and in the third-party browsers drawImage(video, …) can
+// sample nothing from it and yield solid black. The preview looks perfect
+// because that layer is what the resident sees, while every frame the decoder
+// gets is empty — indistinguishable on screen from a code that cannot be read,
+// and the reason Safari scans while another iOS browser on the same engine
+// does not.
+const FLAT_FRAME_SPREAD = 12;
+// Don't start looking until a scan is already failing; a successful one is long
+// finished by then, so this costs nothing in the normal case.
+const FLAT_CHECK_AFTER_MS = 2500;
+// Consecutive flat frames before acting. Several in a row rules out a single
+// frame caught mid-initialisation.
+const FLAT_STREAK_TO_SWITCH = 8;
+let flatFrameStreak = 0;
+let useImageBitmap = false;
+
+// Luminance range over a sparse sample of an already-decoded frame. Reuses the
+// ImageData jsQR was handed, so it costs no extra draw or readback.
+function frameSpread(data) {
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < data.length; i += 4 * 53) {
+    const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+    if (lum < min) min = lum;
+    if (lum > max) max = lum;
+  }
+  return max - min;
+}
 let scanStartedAt = 0;
 let decodeAttempts = 0;
 let stallReported = false;
@@ -205,7 +238,12 @@ async function openCamera() {
       video: { ...size, facingMode: { exact: 'environment' } },
     });
   } catch (err) {
-    if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') throw err;
+    // Fall back on anything that isn't a refusal. An `exact` constraint can be
+    // rejected with names that vary by browser, and treating an unexpected one
+    // as fatal would leave the camera unopenable — worse than the soft hint this
+    // replaces. Only a denied permission keeps propagating, so
+    // cameraErrorMessage() can still explain it.
+    if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') throw err;
     console.warn('camera_exact_environment_rejected', err?.name);
     cameraExactRejected = true;
     return navigator.mediaDevices.getUserMedia({ video: { ...size, facingMode: 'environment' } });
@@ -248,6 +286,7 @@ async function startScan() {
     stallReported = false;
     nativeProbationStart = 0;
     decodeInFlight = false;
+    flatFrameStreak = 0;
     scanButton.textContent = 'Stop Camera';
     scanButton.disabled = false;
     requestAnimationFrame(scanFrame);
@@ -338,7 +377,7 @@ zoomOutButton.addEventListener('click', () => setZoom(zoom - zoomStep()));
 // 720x1280 and took a third of the linear resolution off the one platform whose
 // only decoder is jsQR. That regression is what stopped iOS scanning at all.
 // Do not "fix" this to Math.max without testing on a real iPhone.
-function drawScanFrame() {
+function drawScanFrame(source = video) {
   // Native zoom already crops in hardware, so only crop here for digital zoom.
   const crop = zoomTrack ? 1 : zoom;
   const sourceWidth = video.videoWidth / crop;
@@ -351,7 +390,7 @@ function drawScanFrame() {
   canvas.height = Math.round(sourceHeight * scale);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(
-    video,
+    source,
     sourceX, sourceY, sourceWidth, sourceHeight,
     0, 0, canvas.width, canvas.height,
   );
@@ -432,10 +471,45 @@ async function decodeFrame() {
     // rather than throwing a bare ReferenceError every frame forever.
     throw Object.assign(new Error('jsQR unavailable'), { name: 'DecoderUnavailableError' });
   }
-  const ctx = drawScanFrame();
+  // createImageBitmap decodes the frame into an explicit bitmap rather than
+  // asking the canvas to sample a live compositing layer, which is the documented
+  // way round the blank-frame problem below. Only used once flat frames have
+  // actually been observed — it costs an allocation per frame.
+  let source = video;
+  if (useImageBitmap && typeof createImageBitmap === 'function') {
+    try {
+      source = await createImageBitmap(video);
+    } catch {
+      source = video;
+    }
+  }
+  const ctx = drawScanFrame(source);
+  if (source !== video && typeof source.close === 'function') source.close();
+
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const code = jsQR(imageData.data, imageData.width, imageData.height);
-  return code && code.data ? code.data : null;
+  if (code && code.data) {
+    flatFrameStreak = 0;
+    return code.data;
+  }
+
+  // Only once a scan is already failing, and only on the jsQR path — the native
+  // detector never reads pixels back, so it cannot observe this.
+  if (scanStartedAt && performance.now() - scanStartedAt > FLAT_CHECK_AFTER_MS) {
+    if (frameSpread(imageData.data) < FLAT_FRAME_SPREAD) {
+      flatFrameStreak += 1;
+      if (flatFrameStreak === FLAT_STREAK_TO_SWITCH && !useImageBitmap) {
+        // One attempt at the workaround before giving up on this browser.
+        useImageBitmap = true;
+        console.warn('blank_frames_switching_to_imagebitmap');
+      } else if (flatFrameStreak >= FLAT_STREAK_TO_SWITCH * 2) {
+        throw Object.assign(new Error('camera frames are blank'), { name: 'BlankFrameError' });
+      }
+    } else {
+      flatFrameStreak = 0;
+    }
+  }
+  return null;
 }
 
 async function scanFrame() {
@@ -463,6 +537,18 @@ async function scanFrame() {
       }
       reportStall();
     } catch (err) {
+      if (err?.name === 'BlankFrameError') {
+        // The camera is running and the preview looks fine, but nothing readable
+        // ever reaches the decoder. Nothing further in this browser will help,
+        // so name the one thing that does instead of scanning forever.
+        stopScan();
+        setMessage(
+          scanMessage,
+          "This browser can't read the camera on your phone — the preview works but the image never reaches the scanner. Open this page in Safari and scan there.",
+          'error'
+        );
+        return;
+      }
       if (err?.name === 'DecoderUnavailableError') {
         stopScan();
         setMessage(
