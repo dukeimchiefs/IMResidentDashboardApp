@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { createSessionCookie, verifySession, renewSessionCookie } from '../functions/_lib/auth.js';
 
 const SECRET = 'test-session-secret';
-const RESIDENT = { email: 'karen.young@duke.edu', name: 'Karen Young' };
+// Synthetic, deliberately. This repository is public, so fixtures never carry a
+// real address — the roster lives only in the database.
+const RESIDENT = { email: 'resident@duke.edu', name: 'Test Resident' };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // The renewal boundary is defined in terms of Date.now(), so the only way to
