@@ -131,7 +131,15 @@ const MAX_DIGITAL_ZOOM = 4;
 // Bump on every scanner change that needs confirming on a handset. Reported in
 // the stall readout below, so "is this phone running the new code?" is answered
 // by looking at the screen rather than by trusting that a reload took.
-const SCAN_BUILD = '2026-08-04h';
+const SCAN_BUILD = '2026-08-11b';
+
+// Which iOS browser this is. Every iOS browser is WebKit underneath, so no
+// feature test can tell Safari from a third-party wrapper — only the UA names
+// the wrapper. This matters because the blank-frame advice below is "open this
+// in Safari", which is worse than useless when Safari is already what's
+// running. The previous revision never made this check and assumed any blank
+// frame meant a wrapper.
+const IOS_WRAPPER = /CriOS|FxiOS|EdgiOS|OPiOS|GSA\//.exec(navigator.userAgent)?.[0] || '';
 
 // How long to scan with nothing decoded before reporting what the scanner is
 // actually doing. Silence reads exactly like a broken app, and every round of
@@ -176,6 +184,9 @@ const FLAT_CHECK_AFTER_MS = 2500;
 const FLAT_STREAK_TO_SWITCH = 8;
 let flatFrameStreak = 0;
 let useImageBitmap = false;
+// Shown once per scan, so a browser that keeps producing blank frames doesn't
+// rewrite the message on every streak.
+let blankReported = false;
 
 // Luminance range over a sparse sample of an already-decoded frame. Reuses the
 // ImageData jsQR was handed, so it costs no extra draw or readback.
@@ -287,6 +298,7 @@ async function startScan() {
     nativeProbationStart = 0;
     decodeInFlight = false;
     flatFrameStreak = 0;
+    blankReported = false;
     scanButton.textContent = 'Stop Camera';
     scanButton.disabled = false;
     requestAnimationFrame(scanFrame);
@@ -487,7 +499,16 @@ async function decodeFrame() {
   if (source !== video && typeof source.close === 'function') source.close();
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const code = jsQR(imageData.data, imageData.width, imageData.height);
+  // 'dontInvert' rather than jsQR's default 'attemptBoth'. The default scans the
+  // frame, fails, inverts it and scans again — and until the scan succeeds every
+  // frame is a failing frame, so the whole session pays double. These QRs are
+  // always dark-on-light (qrcode.make output, on a screen or on paper), so the
+  // inverted pass can never hit. Halves time-to-decode without giving up any
+  // resolution, which matters because iOS runs jsQR over the full 1080x1920
+  // frame (see drawScanFrame) and cutting pixels there is what broke it before.
+  const code = jsQR(imageData.data, imageData.width, imageData.height, {
+    inversionAttempts: 'dontInvert',
+  });
   if (code && code.data) {
     flatFrameStreak = 0;
     return code.data;
@@ -496,14 +517,20 @@ async function decodeFrame() {
   // Only once a scan is already failing, and only on the jsQR path — the native
   // detector never reads pixels back, so it cannot observe this.
   if (scanStartedAt && performance.now() - scanStartedAt > FLAT_CHECK_AFTER_MS) {
-    if (frameSpread(imageData.data) < FLAT_FRAME_SPREAD) {
+    const spread = frameSpread(imageData.data);
+    if (spread < FLAT_FRAME_SPREAD) {
       flatFrameStreak += 1;
       if (flatFrameStreak === FLAT_STREAK_TO_SWITCH && !useImageBitmap) {
         // One attempt at the workaround before giving up on this browser.
         useImageBitmap = true;
         console.warn('blank_frames_switching_to_imagebitmap');
       } else if (flatFrameStreak >= FLAT_STREAK_TO_SWITCH * 2) {
-        throw Object.assign(new Error('camera frames are blank'), { name: 'BlankFrameError' });
+        // Reset so the caller re-earns this rather than re-throwing every frame.
+        flatFrameStreak = 0;
+        throw Object.assign(new Error('camera frames are blank'), {
+          name: 'BlankFrameError',
+          spread,
+        });
       }
     } else {
       flatFrameStreak = 0;
@@ -538,18 +565,35 @@ async function scanFrame() {
       reportStall();
     } catch (err) {
       if (err?.name === 'BlankFrameError') {
-        // The camera is running and the preview looks fine, but nothing readable
-        // ever reaches the decoder. Nothing further in this browser will help,
-        // so name the one thing that does instead of scanning forever.
-        stopScan();
-        setMessage(
-          scanMessage,
-          "This browser can't read the camera on your phone — the preview works but the image never reaches the scanner. Open this page in Safari and scan there.",
-          'error'
-        );
-        return;
-      }
-      if (err?.name === 'DecoderUnavailableError') {
+        console.warn('blank_frames', err.spread, IOS_WRAPPER || 'no-wrapper');
+        // Only a third-party iOS browser has somewhere better to go. Switching
+        // is a real fix there: the wrapper cannot sample the compositing layer,
+        // and Safari can.
+        if (IOS_WRAPPER) {
+          stopScan();
+          setMessage(
+            scanMessage,
+            "This browser can't read the camera on your phone — the preview works but the image never reaches the scanner. Open this page in Safari and scan there.",
+            'error'
+          );
+          return;
+        }
+        // Reaching here in Safari itself falsifies the theory this check was
+        // built on, so don't act on that theory: telling a Safari user to open
+        // Safari is a dead end, and stopping the scan removes the chance it
+        // recovers once focus or lighting changes. Keep scanning, say what is
+        // actually wrong, and put the number on screen so it can be read off a
+        // handset rather than guessed at.
+        if (!blankReported) {
+          blankReported = true;
+          setMessage(
+            scanMessage,
+            `The camera is running but the image is coming back nearly blank (spread ${err.spread}, needs ${FLAT_FRAME_SPREAD}+). Try more light on the code, and move back a hand's width so it can focus. Still scanning.`,
+            'error'
+          );
+        }
+        // Falls through to the requestAnimationFrame below — keep looking.
+      } else if (err?.name === 'DecoderUnavailableError') {
         stopScan();
         setMessage(
           scanMessage,
@@ -557,10 +601,11 @@ async function scanFrame() {
           'error'
         );
         return;
+      } else {
+        // An exception here used to kill the rAF loop outright, which looked
+        // exactly like "the app does nothing" — keep looping, but leave a trace.
+        console.error('decode_failed', err?.name, err?.message);
       }
-      // An exception here used to kill the rAF loop outright, which looked
-      // exactly like "the app does nothing" — keep looping, but leave a trace.
-      console.error('decode_failed', err?.name, err?.message);
     } finally {
       decodeInFlight = false;
     }
