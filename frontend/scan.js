@@ -125,13 +125,16 @@ let scanning = false;
 const CAPTURE_WIDTH = 1920;
 const CAPTURE_HEIGHT = 1080;
 const MAX_SCAN_WIDTH = 1280;
-// Cameras that expose no zoom capability fall back to cropping the frame.
+// Cameras that expose no zoom capability fall back to scaling the preview. That
+// is all digital zoom does now — it never reaches the decoder (see
+// drawScanFrame), so it is an aiming aid rather than anything that affects what
+// can be read.
 const MAX_DIGITAL_ZOOM = 4;
 
 // Bump on every scanner change that needs confirming on a handset. Reported in
 // the stall readout below, so "is this phone running the new code?" is answered
 // by looking at the screen rather than by trusting that a reload took.
-const SCAN_BUILD = '2026-08-11b';
+const SCAN_BUILD = '2026-08-12a';
 
 // Which iOS browser this is. Every iOS browser is WebKit underneath, so no
 // feature test can tell Safari from a third-party wrapper — only the UA names
@@ -389,13 +392,19 @@ zoomOutButton.addEventListener('click', () => setZoom(zoom - zoomStep()));
 // 720x1280 and took a third of the linear resolution off the one platform whose
 // only decoder is jsQR. That regression is what stopped iOS scanning at all.
 // Do not "fix" this to Math.max without testing on a real iPhone.
+// The decoder always gets the WHOLE frame. Digital zoom used to crop the centre
+// here, which could not help and could only hurt: the crop was drawn 1:1 rather
+// than upscaled, so the code landed on exactly the pixels it would have at 1x
+// while everything outside the crop became invisible to the decoder. jsQR needs
+// all three finder patterns and the quiet zone in frame, so a code that drifted
+// off-centre — or hand shake at 4x, where only the middle 270x480 was read —
+// failed outright instead of degrading. Zoom is now a preview aid only: it helps
+// the resident aim, and setZoom still scales the video element for that. Native
+// zoom is unaffected, since it magnifies in hardware and the frame arrives
+// already zoomed.
 function drawScanFrame(source = video) {
-  // Native zoom already crops in hardware, so only crop here for digital zoom.
-  const crop = zoomTrack ? 1 : zoom;
-  const sourceWidth = video.videoWidth / crop;
-  const sourceHeight = video.videoHeight / crop;
-  const sourceX = (video.videoWidth - sourceWidth) / 2;
-  const sourceY = (video.videoHeight - sourceHeight) / 2;
+  const sourceWidth = video.videoWidth;
+  const sourceHeight = video.videoHeight;
   const scale = Math.min(1, MAX_SCAN_WIDTH / sourceWidth);
 
   canvas.width = Math.round(sourceWidth * scale);
@@ -403,7 +412,7 @@ function drawScanFrame(source = video) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(
     source,
-    sourceX, sourceY, sourceWidth, sourceHeight,
+    0, 0, sourceWidth, sourceHeight,
     0, 0, canvas.width, canvas.height,
   );
   return ctx;
@@ -451,11 +460,10 @@ function demoteDetector(reason) {
 async function decodeFrame() {
   const detector = await getDetector();
   if (detector) {
-    // Hardware-backed, so hand it the untouched video element unless digital
-    // zoom means we owe it a cropped frame.
-    const source = !zoomTrack && zoom !== 1 ? (drawScanFrame(), canvas) : video;
+    // Hardware-backed, and there is no longer a cropped frame to owe it — the
+    // video element is the whole frame, which is exactly what it should see.
     try {
-      const codes = await detector.detect(source);
+      const codes = await detector.detect(video);
       const hit = codes.find((c) => c.rawValue);
       if (hit) {
         nativeProbationStart = 0; // proved it works; never demote this session
