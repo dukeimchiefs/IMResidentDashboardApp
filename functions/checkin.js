@@ -6,9 +6,9 @@
 // JSON API — a plain form post, so the only JavaScript on the page is
 // Turnstile's.
 
-import { getRoster, hasCheckedIn, hasEverCheckedIn, insertAttendance } from './_lib/db.js';
+import { getRoster, hasCheckedIn, insertAttendance } from './_lib/db.js';
 import { validateScannedPayload, todayET } from './_lib/token.js';
-import { EVENT_TYPES, isOncePerResident } from './_lib/eventTypes.js';
+import { EVENT_TYPES } from './_lib/eventTypes.js';
 import { matchRosterName, normalizeName } from './_lib/names.js';
 import { html } from './_lib/http.js';
 import { checkFixedWindow } from './_lib/rateLimit.js';
@@ -240,8 +240,7 @@ export async function onRequestPost({ request, env }) {
   // Debug accounts stop here. Everything that proves the flow works has already
   // run — the QR validated, the name resolved to a roster row — so the response
   // confirms a real success without writing an attendance row. Repeated testing
-  // therefore can't accrue points, distort the leaderboard, or burn a
-  // once-per-resident event like welcome.
+  // therefore can't accrue points or distort the leaderboard.
   //
   // The flag lives on the roster row rather than in an allowlist here because
   // this repository is public; a hardcoded name would be published with it.
@@ -254,20 +253,12 @@ export async function onRequestPost({ request, env }) {
   }
 
   const eventDate = todayET();
-  const onceEver = isOncePerResident(resolved.eventKey);
 
-  // Once-per-resident types dedupe across every date, not just today: their QR
-  // never rotates, so a date-scoped check would let the same onboarding poster
-  // mint a fresh row for the same resident every morning.
-  const alreadyChecked = onceEver
-    ? await hasEverCheckedIn(env.DB, rosterEntry.name, eventInfo.dbValue)
-    : await hasCheckedIn(env.DB, rosterEntry.name, eventDate, eventInfo.dbValue);
-
-  // "today" would be actively misleading for a once-ever type — the resident's
-  // earlier check-in may well have been weeks ago.
-  const duplicateDetail = onceEver
-    ? `${eventInfo.label} only needs doing once, and you're already done.`
-    : `You already checked in to ${eventInfo.label} today.`;
+  // Every live event recurs, so one check-in per resident per day per type is
+  // the whole dedupe rule. The date-independent variant this used to branch on
+  // existed for the retired 'welcome' onboarding poster, whose QR never expired.
+  const alreadyChecked = await hasCheckedIn(env.DB, rosterEntry.name, eventDate, eventInfo.dbValue);
+  const duplicateDetail = `You already checked in to ${eventInfo.label} today.`;
 
   if (alreadyChecked) {
     return messagePage(`You're already checked in, ${rosterEntry.name}`, duplicateDetail, 'ok');
@@ -280,10 +271,9 @@ export async function onRequestPost({ request, env }) {
     timestamp: new Date().toISOString(),
   });
 
-  // Lost a race to a concurrent submit for the same (name, date, event_type) —
-  // or, for a once-per-resident type, for the same (name, event_type) on any
-  // date, which the partial UNIQUE index in schema.sql rejects. Either way the
-  // resident is checked in, which is all they care about.
+  // Lost a race to a concurrent submit for the same (name, date, event_type),
+  // which the table's UNIQUE constraint rejects. Either way the resident is
+  // checked in, which is all they care about.
   if (!inserted) {
     return messagePage(`You're already checked in, ${rosterEntry.name}`, duplicateDetail, 'ok');
   }

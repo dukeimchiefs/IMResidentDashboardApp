@@ -14,10 +14,12 @@ on:
     inputs:
       event_types:
         description: >-
-          Space-separated event types to (re)generate, e.g. "welcome". Defaults
-          to the weekly lecture set. Useful for one-off regeneration of a static
-          event (like welcome) with the correct QR_SECRET, since that secret
-          can't be read back out to regenerate it locally by hand.
+          Space-separated subset of "noon learning grandrounds" to (re)generate.
+          Defaults to all three. Useful for a one-off regeneration with the
+          correct QR_SECRET, since that secret can't be read back out to
+          regenerate a code locally by hand. Anything outside that list is
+          rejected by scripts/generate_qr.py — the retired "welcome" type
+          included.
         required: false
         default: 'noon learning grandrounds'
 

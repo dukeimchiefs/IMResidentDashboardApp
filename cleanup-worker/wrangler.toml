@@ -2,6 +2,12 @@ name = "imresidentdashboardapp-cleanup"
 main = "src/index.js"
 compatibility_date = "2026-07-01"
 
+# This Worker exports only a scheduled() handler, so a public route would answer
+# every request with an error anyway. Turning the workers.dev subdomain off
+# means it isn't reachable from the internet at all — the cron is the only way
+# in, which is the whole surface it needs.
+workers_dev = false
+
 # Cloudflare Pages Functions cannot run Cron Triggers — scheduled execution
 # requires a standalone Worker, hence this separate deployable. It shares the
 # same D1 database as the main Pages project.

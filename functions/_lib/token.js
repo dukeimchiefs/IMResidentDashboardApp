@@ -1,4 +1,4 @@
-import { QR_PREFIXES, MULTI_DAY_WINDOWS, WEEKLY_TYPES } from './eventTypes.js';
+import { QR_PREFIXES, WEEKLY_TYPES } from './eventTypes.js';
 import { timingSafeEqualStr } from './adminAuth.js';
 
 const TOKEN_HEX_LENGTH = 16; // 16 hex chars = 8 bytes = 64 bits, plenty vs. guessing within a single day
@@ -74,13 +74,8 @@ const STALE_LOOKBACK_WEEKS = 8;
 // nearby period, rather than being unrecognised input.
 async function isStalePayload(secret, parsed, dateStr) {
   const candidates = [];
-  const window = MULTI_DAY_WINDOWS[parsed.type];
 
-  if (window) {
-    // Reached only when dateStr falls outside the fixed window, so a match here
-    // means the code is real but its window has passed (or not yet opened).
-    candidates.push(window.anchorDate);
-  } else if (WEEKLY_TYPES.includes(parsed.type)) {
+  if (WEEKLY_TYPES.includes(parsed.type)) {
     const thisWeek = weekAnchor(dateStr);
     for (let i = 1; i <= STALE_LOOKBACK_WEEKS; i++) {
       candidates.push(addDaysToDateStr(thisWeek, -7 * i));
@@ -107,28 +102,18 @@ async function isStalePayload(secret, parsed, dateStr) {
   return false;
 }
 
-// Returns { valid: boolean, stale?: true, type?: 'noon'|'learning'|'grandrounds'|'welcome' }
+// Returns { valid: boolean, stale?: true, type?: 'noon'|'learning'|'grandrounds' }
 export async function validateScannedPayload(secret, payload, dateStr = todayET()) {
   const parsed = parsePayload(payload);
   if (!parsed) return { valid: false };
 
-  const window = MULTI_DAY_WINDOWS[parsed.type];
-  // validDays === null is an open-ended window: only the anchor's lower bound
-  // applies, so the code never rotates out from under a printed sign.
-  const outOfWindow = window
-    && (dateStr < window.anchorDate
-      || (window.validDays !== null && dateStr >= addDaysToDateStr(window.anchorDate, window.validDays)));
-
-  if (!outOfWindow) {
-    // Fixed-window types use their own anchor, weekly lecture types use the
-    // current week's Saturday, and anything else still rotates daily.
-    let tokenDate = dateStr;
-    if (window) tokenDate = window.anchorDate;
-    else if (WEEKLY_TYPES.includes(parsed.type)) tokenDate = weekAnchor(dateStr);
-
-    const expected = await computeDailyToken(secret, tokenDate, parsed.type);
-    if (await timingSafeEqualStr(expected, parsed.token)) return { valid: true, type: parsed.type };
-  }
+  // Weekly lecture types use the current week's Saturday; anything else still
+  // rotates daily. (The daily branch has no current members — all three live
+  // types are weekly — but it is the fallback a newly added type gets by
+  // default, so it stays.)
+  const tokenDate = WEEKLY_TYPES.includes(parsed.type) ? weekAnchor(dateStr) : dateStr;
+  const expected = await computeDailyToken(secret, tokenDate, parsed.type);
+  if (await timingSafeEqualStr(expected, parsed.token)) return { valid: true, type: parsed.type };
 
   // Separate "a real code that has since rotated" from unrecognised input, so a
   // resident scanning yesterday's screen is told the code is stale instead of

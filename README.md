@@ -4,9 +4,16 @@ QR-code-based conference check-in for residents. A resident points their phone's
 camera at the code on screen, taps the link, types their name, and is done. There is no
 sign-in, no password, no email, and nothing to install.
 
-Four server-side-verified HMAC QR codes — **Noon Conference**, **Learning Session** and
-**Medicine Grand Rounds** (rotating weekly) plus a permanent **Welcome** code — each
-encoding a URL of the form `https://imresidentdashboardapp.pages.dev/checkin?e=<type>&t=<token>`.
+Three server-side-verified HMAC QR codes — **Noon Conference**, **Learning Session** and
+**Medicine Grand Rounds**, all rotating weekly — each encoding a URL of the form
+`https://imresidentdashboardapp.pages.dev/checkin?e=<type>&t=<token>`.
+
+A fourth code, **Welcome**, was retired on 2026-08-13. Its 27 attendance rows remain in
+the database and still count toward residents' points, so `welcome` is deliberately kept
+in the `attendance` CHECK list, in the partial unique index, in `dbValueToLabel`'s
+retired-label map, and in `scrape_attendance.py`'s `EVENT_LABELS`. What was removed is
+only the ability to check into it: the type is gone from `EVENT_TYPES`, so its QR prefix
+no longer parses and any surviving photo of the poster is rejected.
 
 ## How a check-in works
 
@@ -165,19 +172,8 @@ every Saturday morning, committing fresh PNGs. Tokens are anchored to the Saturd
 the lecture week (`week_anchor`), so a run that GitHub delays by several hours still emits
 the correct week's token. The commit triggers a Pages rebuild automatically.
 
-`welcome` is generated once and never rotates (`MULTI_DAY_WINDOWS`, `valid_days: None`);
-the Worker caps it at one check-in per resident instead. Regenerate it via the workflow's
-`workflow_dispatch` input, since `QR_SECRET` can't be read back out to run the script
-locally.
-
 `frontend/display-noon.html`, `display-learning.html` and `display-grandrounds.html` each
 show one event's current code full-size, for projecting in that event's room.
-
-> **After deploying this rewrite, the QR codes must be regenerated.** The committed PNGs
-> encode the old bare `"<type>:<token>"` payload, which a phone camera displays as
-> meaningless text rather than opening. Run the workflow manually (Actions → Rotate weekly
-> QR codes → Run workflow) with `noon learning grandrounds welcome` before the next
-> lecture.
 
 ## Local development
 

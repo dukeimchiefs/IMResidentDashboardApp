@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import { onRequestGet, onRequestPost } from '../functions/checkin.js';
 import { computeDailyToken, todayET } from '../functions/_lib/token.js';
-import { MULTI_DAY_WINDOWS } from '../functions/_lib/eventTypes.js';
 
 const QR_SECRET = 'test-qr-secret';
 const TURNSTILE_HOSTNAME = 'example.test';
@@ -39,9 +38,9 @@ function stubTurnstile(succeed = true) {
 
 // Minimal D1 stand-in: enough of the roster and attendance tables to exercise
 // the real matching and dedupe paths, dispatching on SQL text rather than
-// parsing it. Enforces both uniqueness rules the production schema does — the
-// per-date UNIQUE constraint and the partial UNIQUE index on welcome — so the
-// endpoint's race-loser branch is reachable here too.
+// parsing it. Enforces the production table's UNIQUE (name, event_date,
+// event_type) constraint, so the endpoint's race-loser branch is reachable here
+// too.
 function fakeDb(rows = [], roster = [RESIDENT, TESTER]) {
   const attendance = [...rows];
   return {
@@ -64,10 +63,6 @@ function fakeDb(rows = [], roster = [RESIDENT, TESTER]) {
             const hit = attendance.find((r) => r.name === name && r.event_date === date && r.event_type === type);
             return hit ? { 1: 1 } : null;
           }
-          if (sql.includes('FROM attendance WHERE name = ? AND event_type = ?')) {
-            const [name, type] = stmt.args;
-            return attendance.find((r) => r.name === name && r.event_type === type) ? { 1: 1 } : null;
-          }
           throw new Error(`unexpected first() query: ${sql}`);
         },
         async run() {
@@ -76,9 +71,7 @@ function fakeDb(rows = [], roster = [RESIDENT, TESTER]) {
           const perDateClash = attendance.some(
             (r) => r.name === name && r.event_date === event_date && r.event_type === event_type
           );
-          const welcomeClash =
-            event_type === 'welcome' && attendance.some((r) => r.name === name && r.event_type === 'welcome');
-          if (perDateClash || welcomeClash) throw new Error('UNIQUE constraint failed');
+          if (perDateClash) throw new Error('UNIQUE constraint failed');
           attendance.push({ name, event_type, event_date, timestamp });
           return { success: true };
         },
@@ -116,8 +109,6 @@ async function open(db, qrType, tokenDate, { token } = {}) {
   const response = await onRequestGet({ request, env: { ...ENV, DB: db } });
   return { status: response.status, html: await response.text() };
 }
-
-const WELCOME_ANCHOR = MULTI_DAY_WINDOWS.welcome.anchorDate;
 
 // The endpoint always validates against the real current date, so a lecture
 // token has to be anchored to the live week rather than a fixture date.
@@ -257,56 +248,8 @@ test('a valid name with an invalid token records nothing', async () => {
   }
 });
 
-test('a resident can only ever check in to welcome once', async () => {
-  const restore = stubTurnstile();
-  try {
-    const db = fakeDb();
-    const first = await submit(db, 'welcome', WELCOME_ANCHOR, 'Test Resident');
-    assert.equal(first.status, 200);
-    assert.equal(db.attendance.length, 1);
 
-    // The second submission is on a *different* date than the first — the case
-    // the per-day rule allows and an indefinitely-valid QR makes easy to hit.
-    db.attendance[0].event_date = '2026-07-20';
-    const second = await submit(db, 'welcome', WELCOME_ANCHOR, 'Test Resident');
-    assert.match(second.html, /already checked in/i);
-    assert.equal(db.attendance.length, 1, 'no second welcome row should be written');
-  } finally {
-    restore();
-  }
-});
 
-test('the once-ever message does not claim the earlier check-in was today', async () => {
-  const restore = stubTurnstile();
-  try {
-    const db = fakeDb([
-      { name: RESIDENT.name, event_type: 'welcome', event_date: '2026-07-20', timestamp: '2026-07-20T14:00:00.000Z' },
-    ]);
-    const { html } = await submit(db, 'welcome', WELCOME_ANCHOR, 'Test Resident');
-    assert.match(html, /only needs doing once/);
-    assert.doesNotMatch(html, /today/);
-  } finally {
-    restore();
-  }
-});
-
-test('a concurrent second welcome submit loses to the unique index, not a duplicate row', async () => {
-  const restore = stubTurnstile();
-  try {
-    // Skips the SELECT by racing the insert directly: both requests observe an
-    // empty table, so only the index can separate them.
-    const db = fakeDb();
-    const [a, b] = await Promise.all([
-      submit(db, 'welcome', WELCOME_ANCHOR, 'Test Resident'),
-      submit(db, 'welcome', WELCOME_ANCHOR, 'Test Resident'),
-    ]);
-    assert.equal(db.attendance.length, 1);
-    // Both residents are told they are checked in, because both are.
-    for (const r of [a, b]) assert.match(r.html, /checked in/i);
-  } finally {
-    restore();
-  }
-});
 
 test('lectures still allow one check-in per day, not one ever', async () => {
   const restore = stubTurnstile();
@@ -357,20 +300,6 @@ test('a test account can submit the same code without limit', async () => {
   }
 });
 
-test('a test account does not consume its once-per-resident welcome', async () => {
-  const restore = stubTurnstile();
-  try {
-    const db = fakeDb();
-    await submit(db, 'welcome', WELCOME_ANCHOR, 'Flow Debugger');
-    await submit(db, 'welcome', WELCOME_ANCHOR, 'Flow Debugger');
-    const { status, html } = await submit(db, 'welcome', WELCOME_ANCHOR, 'Flow Debugger');
-    assert.equal(status, 200, 'welcome must never lock out a debug account');
-    assert.match(html, /not recorded/);
-    assert.equal(db.attendance.length, 0);
-  } finally {
-    restore();
-  }
-});
 
 test('a test account still has its QR validated, not waved through', async () => {
   const restore = stubTurnstile();
@@ -378,6 +307,43 @@ test('a test account still has its QR validated, not waved through', async () =>
     const db = fakeDb();
     const { status } = await submit(db, 'noon', null, 'Flow Debugger', { token: '0000000000000000' });
     assert.equal(status, 400, 'a bad token must fail for a test account too');
+    assert.equal(db.attendance.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('a concurrent second submit loses to the unique constraint, not a duplicate row', async () => {
+  const restore = stubTurnstile();
+  try {
+    // Skips the SELECT by racing the insert directly: both requests observe an
+    // empty table, so only the constraint can separate them.
+    const db = fakeDb();
+    const [a, b] = await Promise.all([
+      submit(db, 'noon', weekAnchorForToday(), 'Test Resident'),
+      submit(db, 'noon', weekAnchorForToday(), 'Test Resident'),
+    ]);
+    assert.equal(db.attendance.length, 1);
+    // Both residents are told they are checked in, because both are.
+    for (const r of [a, b]) assert.match(r.html, /checked in/i);
+  } finally {
+    restore();
+  }
+});
+
+test('the retired welcome event cannot be checked into', async () => {
+  // Its QR was deleted on 2026-08-13, but an old photo of one still exists in
+  // the world and the QR_SECRET that signed it has not been rotated. The type
+  // is absent from EVENT_TYPES, so the prefix no longer parses at all.
+  const restore = stubTurnstile();
+  try {
+    const db = fakeDb();
+    const get = await open(db, 'welcome', '2026-07-17');
+    assert.equal(get.status, 400);
+    assert.doesNotMatch(get.html, /name="name"/, 'no form may be offered for a retired event');
+
+    const post = await submit(db, 'welcome', '2026-07-17', 'Test Resident');
+    assert.equal(post.status, 400);
     assert.equal(db.attendance.length, 0);
   } finally {
     restore();

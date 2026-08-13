@@ -27,16 +27,6 @@ EVENT_TYPES = ["noon", "learning", "grandrounds"]
 # WEEKLY_TYPES in functions/_lib/eventTypes.js.
 WEEKLY_TYPES = {"noon", "learning", "grandrounds"}
 
-# Event types whose QR is a single static image valid across a multi-day window
-# instead of rotating daily. valid_days None means the window never closes, so the
-# generated PNG stays scannable forever and never needs regenerating — the Worker
-# caps those types at one check-in per resident instead (ONCE_PER_RESIDENT).
-# Only anchor_date is read here; valid_days is mirrored for parity with the
-# Worker. Must mirror MULTI_DAY_WINDOWS in functions/_lib/eventTypes.js.
-MULTI_DAY_WINDOWS = {
-    "welcome": {"anchor_date": "2026-07-17", "valid_days": None},
-}
-
 TOKEN_HEX_LENGTH = 16  # must match TOKEN_HEX_LENGTH in functions/_lib/token.js
 
 # A URL is roughly three times longer than the old bare payload, which pushes the
@@ -84,7 +74,7 @@ def checkin_url(event_type: str, token: str) -> str:
     return f"{APP_URL}/checkin?" + urlencode({"e": event_type, "t": token})
 
 
-VALID_EVENT_TYPES = set(EVENT_TYPES) | set(MULTI_DAY_WINDOWS)
+VALID_EVENT_TYPES = set(EVENT_TYPES)
 
 
 def main():
@@ -102,10 +92,7 @@ def main():
     if unknown:
         sys.exit(f"Unknown event type(s): {', '.join(unknown)}. Valid: {', '.join(sorted(VALID_EVENT_TYPES))}")
     for event_type in types_to_generate:
-        window = MULTI_DAY_WINDOWS.get(event_type)
-        if window:
-            token_date = window["anchor_date"]
-        elif event_type in WEEKLY_TYPES:
+        if event_type in WEEKLY_TYPES:
             token_date = week_anchor(date_str)
         else:
             token_date = date_str

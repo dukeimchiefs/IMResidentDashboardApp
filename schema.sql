@@ -22,6 +22,12 @@ CREATE TABLE roster (
 -- roster already contains ever reach this table — the Worker rejects anything
 -- it cannot resolve to exactly one roster row, and writes the roster's
 -- spelling rather than the typed one.
+--
+-- 'welcome' stays in the CHECK list even though its QR was retired on
+-- 2026-08-13 and nothing can write one any more. The live database holds 27
+-- welcome rows that still count toward residents' points, and this file has to
+-- keep describing that database exactly — a rebuild from a CHECK list without
+-- 'welcome' would reject those rows on the way back in.
 CREATE TABLE attendance (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -34,13 +40,12 @@ CREATE TABLE attendance (
 CREATE INDEX idx_attendance_date_type ON attendance (event_date, event_type);
 CREATE INDEX idx_attendance_name ON attendance (name);
 
--- Onboarding happens once per resident, ever. The table's UNIQUE constraint is
--- scoped to a single event_date, which is the right rule for recurring lectures
--- but not for 'welcome': its QR has no expiry (MULTI_DAY_WINDOWS.welcome sets
--- validDays: null), so without this a resident could resubmit the same poster
--- for a new row every day. Mirrors ONCE_PER_RESIDENT in
--- functions/_lib/eventTypes.js — adding a type there needs a matching partial
--- index here.
+-- Retained for the same reason as the CHECK list above: it guards the 27
+-- historical welcome rows against duplication. Onboarding happened once per
+-- resident ever, which the table's per-date UNIQUE constraint could not express
+-- on its own, since the welcome QR never expired. Nothing writes welcome any
+-- more, so this index is now inert — but dropping it would let a future bulk
+-- import silently double those rows.
 CREATE UNIQUE INDEX idx_attendance_welcome_once ON attendance (name) WHERE event_type = 'welcome';
 
 -- Rate limiting backed by D1 (not Cloudflare KV). KV's read-then-write isn't
