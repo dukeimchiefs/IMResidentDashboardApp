@@ -8,14 +8,15 @@ database_name = "attendance-db"
 database_id = "b989ffda-3604-4f37-a13d-e1c685848f9c"
 
 [vars]
-# nicholasbrazeau.com is verified in Resend (DKIM/SPF/DMARC), so sign-in
-# emails send from a real address instead of the onboarding@resend.dev
-# sandbox — this is required for delivery to actual resident @duke.edu
-# inboxes, not just the account owner's own verified address.
+# The only mail this app still sends is the security alert raised when someone
+# repeatedly fails the /attendance password or the /export admin key (see
+# functions/_lib/securityAlerts.js). Residents receive nothing — they check in
+# by opening a QR link and typing their name, with no sign-in step at all.
+# nicholasbrazeau.com is verified in Resend (DKIM/SPF/DMARC).
 RESEND_FROM = "noreply@nicholasbrazeau.com"
-# An ImprovMX alias forwarding to the program's inbox. A From domain that can't
-# be replied to is penalised by Exchange Online Protection, and residents who
-# hit reply on a no-reply address get silence.
-RESEND_REPLY_TO = "residency@nicholasbrazeau.com"
+# Guards the check-in form. Residents submit with no authentication of any kind,
+# so this is the only thing between the form and a script filling the attendance
+# table. Set this sitekey's widget mode to Invisible in the Cloudflare dashboard
+# so residents never see a challenge.
 TURNSTILE_SITEKEY = "0x4AAAAAAD7jlOk1_ML_5VY1"
 TURNSTILE_HOSTNAME = "imresidentdashboardapp.pages.dev"

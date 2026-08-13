@@ -1,164 +1,298 @@
-import { hasCheckedIn, hasEverCheckedIn, insertAttendance, getRosterEntry } from './_lib/db.js';
-import { verifySession, sessionRenewalHeaders } from './_lib/auth.js';
+// The entire resident-facing app.
+//
+// A phone's native camera opens /checkin?e=<type>&t=<token> straight from the
+// posted QR. GET renders a form with one field; POST records the check-in and
+// renders the result. No sign-in, no session, no client-side scanner, and no
+// JSON API — a plain form post, so the only JavaScript on the page is
+// Turnstile's.
+
+import { getRoster, hasCheckedIn, hasEverCheckedIn, insertAttendance } from './_lib/db.js';
 import { validateScannedPayload, todayET } from './_lib/token.js';
 import { EVENT_TYPES, isOncePerResident } from './_lib/eventTypes.js';
-import { json } from './_lib/http.js';
+import { matchRosterName, normalizeName } from './_lib/names.js';
+import { html } from './_lib/http.js';
 import { checkFixedWindow } from './_lib/rateLimit.js';
+import { validateTurnstile } from './_lib/turnstile.js';
 
-// Keyed by resident (session email), not IP: many residents legitimately check
-// in from the same conference-room wifi within a couple minutes of each other
-// (see CLAUDE.md), so an IP-scoped limit would risk throttling a whole room.
-// 4 event types/day max in practice, so this comfortably covers retries.
-const EMAIL_LIMIT = 20;
-const EMAIL_WINDOW_SECONDS = 600; // 20 requests / 10 minutes per resident
+// Two limits, because one can't do both jobs. Residents check in from a single
+// conference-room or hospital Wi-Fi that NATs the entire room behind one
+// address, so a tight per-IP cap would throttle a full lecture hall — the old
+// sign-in build sidestepped this by keying on the session email, which no
+// longer exists. So the tight limit is keyed per person-per-IP (a resident
+// retrying), and the loose one is a per-IP ceiling set above any real room but
+// far below a script.
+const PERSON_LIMIT = 8;
+const PERSON_WINDOW_SECONDS = 600;
+const IP_LIMIT = 240;
+const IP_WINDOW_SECONDS = 600;
+
+// Turnstile is embedded with implicit rendering, so it needs its script and
+// frame but no inline script of our own — script-src stays free of
+// 'unsafe-inline'. Overrides http.js's DEFAULT_HTML_CSP, which allows neither.
+const PAGE_HEADERS = {
+  'Content-Security-Policy':
+    "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+};
+
+// Inlined rather than linked to /style.css: this page is the whole app, and a
+// resident standing in a lecture hall on hospital Wi-Fi should get a laid-out
+// page in one round trip instead of an unstyled flash if the stylesheet lags.
+const PAGE_STYLE = `
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f3f2f1;color:#262626;padding:1.5rem}
+.card{width:100%;max-width:24rem;text-align:center}
+.event{font-size:1.5rem;font-weight:600;color:#012169;margin:0 0 .25rem}
+.date{font-size:1rem;color:#57606a;margin:0 0 2rem}
+label{display:block;text-align:left;font-size:1rem;font-weight:600;margin-bottom:.5rem}
+input[type=text]{width:100%;padding:.9rem;font-size:1.15rem;border:1px solid #c9c9c9;border-radius:10px;margin-bottom:1rem}
+button{width:100%;padding:.95rem;font-size:1.15rem;font-weight:600;border:none;border-radius:10px;background:#00539b;color:#fff;cursor:pointer}
+.challenge{display:flex;justify-content:center;margin-bottom:1rem}
+.result{font-size:1.35rem;font-weight:600;line-height:1.4;margin:0 0 .75rem}
+.detail{font-size:1.05rem;color:#57606a;margin:0}
+.ok .result{color:#1a7f37}
+.bad .result{color:#c62828}
+.hint{font-size:.95rem;color:#57606a;margin-top:1.5rem;line-height:1.5}
+.tick{font-size:3rem;line-height:1;margin:0 0 .5rem}
+`;
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function page(bodyHtml, status = 200) {
+  return html(
+    `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resident Check-In</title>
+<style>${PAGE_STYLE}</style>
+</head>
+<body><div class="card">${bodyHtml}</div>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+</body>
+</html>`,
+    status,
+    PAGE_HEADERS
+  );
+}
+
+// "Tuesday, August 12" in Eastern time, matching the date the check-in is filed
+// under. Purely so the resident can confirm the poster they scanned is today's.
+function friendlyDate(dateStr) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', // dateStr is already an ET calendar date; don't shift it again
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  }).format(new Date(`${dateStr}T12:00:00Z`));
+}
+
+function messagePage(headline, detail, tone = 'bad', status = 200) {
+  return page(
+    `<div class="${tone}">
+      <p class="result">${escapeHtml(headline)}</p>
+      ${detail ? `<p class="detail">${escapeHtml(detail)}</p>` : ''}
+    </div>`,
+    status
+  );
+}
+
+// `error` and `prefillName` are set when re-rendering after a failed submit, so
+// a resident who mistyped doesn't lose what they entered.
+function formPage(eventKey, token, sitekey, { error = '', prefillName = '' } = {}) {
+  const label = EVENT_TYPES[eventKey].label;
+  return page(`
+    <h1 class="event">${escapeHtml(label)}</h1>
+    <p class="date">${escapeHtml(friendlyDate(todayET()))}</p>
+    <form method="POST">
+      <input type="hidden" name="e" value="${escapeHtml(eventKey)}">
+      <input type="hidden" name="t" value="${escapeHtml(token)}">
+      <label for="name">Your name</label>
+      <input type="text" id="name" name="name" value="${escapeHtml(prefillName)}"
+             autocomplete="name" autocapitalize="words" autocorrect="off" spellcheck="false"
+             enterkeyhint="done" required autofocus>
+      <div class="challenge">
+        <div class="cf-turnstile" data-sitekey="${escapeHtml(sitekey)}" data-action="checkin"></div>
+      </div>
+      <button type="submit">Check in</button>
+    </form>
+    ${error ? `<p class="hint" style="color:#c62828">${escapeHtml(error)}</p>` : ''}
+  `);
+}
+
+// Rejections that aren't the resident's fault get their own wording. A generic
+// "check-in failed" reads identically whether the code is stale, the roster is
+// missing them, or the network dropped — and sends the chiefs chasing the wrong
+// thing.
+const STALE_MESSAGE = 'This code has expired. Ask for the current code to be put back on screen, then scan it again.';
+const INVALID_MESSAGE = "This isn't a valid check-in link. Scan the code on the screen rather than a photo of an older one.";
+
+// Shared by GET and POST: both need the same (e, t) pair validated the same way
+// before anything else happens. Returns { ok: true, eventKey } or { ok: false,
+// response } with the resident-facing page already built.
+async function resolveEvent(env, eventKey, token) {
+  if (!eventKey || !EVENT_TYPES[eventKey] || typeof token !== 'string') {
+    return { ok: false, response: messagePage('Check-in link not recognised', INVALID_MESSAGE, 'bad', 400) };
+  }
+
+  // validateScannedPayload wants the original QR payload form, "<type>:<token>".
+  // The URL splits the two across query parameters so the link stays readable
+  // in a camera's preview banner, so put it back together here.
+  const result = await validateScannedPayload(env.QR_SECRET, `${eventKey}:${token}`);
+  if (!result.valid) {
+    return {
+      ok: false,
+      response: result.stale
+        ? messagePage('Expired code', STALE_MESSAGE, 'bad', 400)
+        : messagePage('Check-in link not recognised', INVALID_MESSAGE, 'bad', 400),
+    };
+  }
+  return { ok: true, eventKey: result.type };
+}
+
+function turnstileSitekey(env) {
+  const sitekey = env.TURNSTILE_SITEKEY;
+  return typeof sitekey === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(sitekey) ? sitekey : null;
+}
+
+export async function onRequestGet({ request, env }) {
+  const url = new URL(request.url);
+  const eventKey = url.searchParams.get('e');
+  const token = url.searchParams.get('t');
+
+  // No rate limit on GET: it validates an HMAC and renders a page without
+  // touching D1, so a flood costs nothing to absorb, while limiting it would
+  // add a D1 write to every poster scan.
+  const resolved = await resolveEvent(env, eventKey, token);
+  if (!resolved.ok) return resolved.response;
+
+  const sitekey = turnstileSitekey(env);
+  if (!sitekey) {
+    console.error('turnstile_sitekey_missing');
+    return messagePage('Check-in is temporarily unavailable', 'Please try again in a few minutes, or tell a chief resident.', 'bad', 503);
+  }
+
+  return formPage(resolved.eventKey, token, sitekey);
+}
 
 export async function onRequestPost({ request, env }) {
-  const session = await verifySession(env.SESSION_SECRET, request);
-  if (!session) return json({ ok: false, error: 'not_authenticated' }, 401);
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
 
-  // Slide the session forward on any authenticated scan, so a resident who only
-  // ever opens the app straight to the scanner stays signed in the same way one
-  // who lands on /me does. Attached to every response below, including the
-  // rejections — the session is equally valid whichever way the scan lands.
-  const renewal = await sessionRenewalHeaders(env.SESSION_SECRET, session);
+  const form = await request.formData().catch(() => null);
+  if (!form) return messagePage('Check-in link not recognised', INVALID_MESSAGE, 'bad', 400);
 
-  const emailOk = await checkFixedWindow(env.DB, 'rl:checkin:email', session.email, EMAIL_LIMIT, EMAIL_WINDOW_SECONDS);
-  if (!emailOk) {
-    return json(
-      { ok: false, error: 'rate_limited', message: 'Too many requests. Please wait a few minutes and try again.' },
-      429,
-      renewal
-    );
+  const eventKey = form.get('e');
+  const token = form.get('t');
+  const typedName = String(form.get('name') || '');
+  const turnstileToken = form.get('cf-turnstile-response');
+
+  const ipOk = await checkFixedWindow(env.DB, 'rl:checkin:ip', ip, IP_LIMIT, IP_WINDOW_SECONDS);
+  if (!ipOk) {
+    return messagePage('Too many check-ins from this network', 'Please wait a few minutes and try again.', 'bad', 429);
   }
 
-  // Re-check roster membership on every scan rather than trusting the (up to
-  // 30-day-old) session payload — a resident removed from the roster after
-  // signing in would otherwise keep checking in, undermining the leaderboard's
-  // trust that attendance rows always map to a currently-active resident.
-  const rosterEntry = await getRosterEntry(env.DB, session.email);
-  if (!rosterEntry) return json({ ok: false, error: 'not_on_roster' }, 403, renewal);
-
-  const { token } = await request.json().catch(() => ({}));
-  const result = await validateScannedPayload(env.QR_SECRET, token);
-  if (!result.valid) {
-    // A code that was genuinely issued but has since rotated gets its own
-    // message: retrying is futile, and the fix is on the screen, not the phone.
-    if (result.stale) {
-      return json(
-        {
-          ok: false,
-          error: 'stale_token',
-          message: 'Stale QR Code. This code has expired — ask for the current code to be displayed, then scan again.',
-        },
-        400,
-        renewal
-      );
-    }
-    // Carries its own message rather than letting the client fall back to a
-    // generic "Check-in failed" — that wording is indistinguishable from a
-    // network error or a camera that never read anything, which sent a real
-    // diagnosis down the wrong path. Say that the code *was* read and rejected.
-    return json(
-      {
-        ok: false,
-        error: 'invalid_token',
-        message: "That code was scanned but isn't a valid check-in code. Make sure you're scanning the code on the screen, not a photo of an older one.",
-      },
-      400,
-      renewal
-    );
+  // Keyed on the normalized name so one resident's retries are capped without
+  // the rest of the room sharing their budget. Normalizing first means
+  // "Nick Brazeau" and "nick  brazeau" spend the same allowance.
+  const personKey = `${ip}|${normalizeName(typedName)}`;
+  const personOk = await checkFixedWindow(env.DB, 'rl:checkin:person', personKey, PERSON_LIMIT, PERSON_WINDOW_SECONDS);
+  if (!personOk) {
+    return messagePage('Too many attempts', 'Please wait a few minutes and try again, or see a chief resident.', 'bad', 429);
   }
 
-  const eventInfo = EVENT_TYPES[result.type];
+  const resolved = await resolveEvent(env, eventKey, token);
+  if (!resolved.ok) return resolved.response;
 
-  // Debug accounts stop here. Everything that proves the scanner works has
-  // already run — the QR was decoded, validated against the secret and resolved
-  // to an event — so the response confirms a real success without writing an
-  // attendance row. Scanning the same code repeatedly while working on the
-  // camera therefore can't accrue points, distort the leaderboard, or burn a
+  const sitekey = turnstileSitekey(env);
+  if (!sitekey) {
+    console.error('turnstile_sitekey_missing');
+    return messagePage('Check-in is temporarily unavailable', 'Please try again in a few minutes, or tell a chief resident.', 'bad', 503);
+  }
+
+  // Re-renders the form rather than dead-ending: a Turnstile token is
+  // single-use and expires after a few minutes, so a resident who filled the
+  // field and then got distracted lands here through no fault of their own.
+  if (!(await validateTurnstile(env, turnstileToken, ip, 'checkin'))) {
+    return formPage(resolved.eventKey, token, sitekey, {
+      error: 'The security check timed out. Tap Check in once more.',
+      prefillName: typedName,
+    });
+  }
+
+  const roster = await getRoster(env.DB);
+  const match = matchRosterName(typedName, roster);
+
+  if (match.status !== 'matched') {
+    const error =
+      match.status === 'empty'
+        ? 'Please type your name.'
+        : match.status === 'ambiguous'
+          ? 'More than one resident matches that name. Please add your middle name or initial.'
+          : "We couldn't find that name on the roster. Check the spelling, or see a chief resident.";
+    return formPage(resolved.eventKey, token, sitekey, { error, prefillName: typedName });
+  }
+
+  const rosterEntry = match.entry;
+  const eventInfo = EVENT_TYPES[resolved.eventKey];
+
+  // Debug accounts stop here. Everything that proves the flow works has already
+  // run — the QR validated, the name resolved to a roster row — so the response
+  // confirms a real success without writing an attendance row. Repeated testing
+  // therefore can't accrue points, distort the leaderboard, or burn a
   // once-per-resident event like welcome.
   //
   // The flag lives on the roster row rather than in an allowlist here because
-  // this repository is public; a hardcoded address would be published with it.
+  // this repository is public; a hardcoded name would be published with it.
   if (rosterEntry.test_account) {
-    return json(
-      {
-        ok: true,
-        testAccount: true,
-        eventType: eventInfo.dbValue,
-        eventLabel: eventInfo.label,
-        name: rosterEntry.name,
-        message: `Scan OK — ${eventInfo.label}. Test account, attendance not recorded.`,
-      },
-      200,
-      renewal
+    return messagePage(
+      `Check-in OK — ${eventInfo.label}`,
+      'Test account, attendance not recorded.',
+      'ok'
     );
   }
 
   const eventDate = todayET();
-  const onceEver = isOncePerResident(result.type);
+  const onceEver = isOncePerResident(resolved.eventKey);
 
   // Once-per-resident types dedupe across every date, not just today: their QR
   // never rotates, so a date-scoped check would let the same onboarding poster
   // mint a fresh row for the same resident every morning.
   const alreadyChecked = onceEver
-    ? await hasEverCheckedIn(env.DB, rosterEntry.email, eventInfo.dbValue)
-    : await hasCheckedIn(env.DB, rosterEntry.email, eventDate, eventInfo.dbValue);
+    ? await hasEverCheckedIn(env.DB, rosterEntry.name, eventInfo.dbValue)
+    : await hasCheckedIn(env.DB, rosterEntry.name, eventDate, eventInfo.dbValue);
 
   // "today" would be actively misleading for a once-ever type — the resident's
   // earlier check-in may well have been weeks ago.
-  const duplicateMessage = onceEver
-    ? `You're already checked in to ${eventInfo.label}, ${rosterEntry.name} — you only need to do this once.`
+  const duplicateDetail = onceEver
+    ? `${eventInfo.label} only needs doing once, and you're already done.`
     : `You already checked in to ${eventInfo.label} today.`;
 
   if (alreadyChecked) {
-    return json(
-      {
-        ok: false,
-        error: 'already_checked_in',
-        eventType: eventInfo.dbValue,
-        eventLabel: eventInfo.label,
-        message: duplicateMessage,
-      },
-      409,
-      renewal
-    );
+    return messagePage(`You're already checked in, ${rosterEntry.name}`, duplicateDetail, 'ok');
   }
 
   const inserted = await insertAttendance(env.DB, {
     name: rosterEntry.name,
-    email: rosterEntry.email,
     eventType: eventInfo.dbValue,
     eventDate,
     timestamp: new Date().toISOString(),
   });
 
+  // Lost a race to a concurrent submit for the same (name, date, event_type) —
+  // or, for a once-per-resident type, for the same (name, event_type) on any
+  // date, which the partial UNIQUE index in schema.sql rejects. Either way the
+  // resident is checked in, which is all they care about.
   if (!inserted) {
-    // Lost a race to a concurrent request for the same (email, date, event_type)
-    // — or, for a once-per-resident type, for the same (email, event_type) on
-    // any date, which the partial UNIQUE index in schema.sql rejects.
-    return json(
-      {
-        ok: false,
-        error: 'already_checked_in',
-        eventType: eventInfo.dbValue,
-        eventLabel: eventInfo.label,
-        message: duplicateMessage,
-      },
-      409,
-      renewal
-    );
+    return messagePage(`You're already checked in, ${rosterEntry.name}`, duplicateDetail, 'ok');
   }
 
-  return json(
-    {
-      ok: true,
-      eventType: eventInfo.dbValue,
-      eventLabel: eventInfo.label,
-      name: rosterEntry.name,
-      message: `Checked in to ${eventInfo.label}, ${rosterEntry.name}!`,
-    },
-    200,
-    renewal
+  return page(
+    `<div class="ok">
+      <p class="tick">&check;</p>
+      <p class="result">You're checked in, ${escapeHtml(rosterEntry.name)}</p>
+      <p class="detail">${escapeHtml(eventInfo.label)} &middot; ${escapeHtml(friendlyDate(eventDate))}</p>
+    </div>`
   );
 }

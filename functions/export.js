@@ -1,6 +1,6 @@
 import { exportAttendance } from './_lib/db.js';
 import { json } from './_lib/http.js';
-import { timingSafeEqualStr } from './_lib/auth.js';
+import { timingSafeEqualStr } from './_lib/adminAuth.js';
 import { checkFixedWindow } from './_lib/rateLimit.js';
 import { recordSecurityFailure } from './_lib/securityAlerts.js';
 

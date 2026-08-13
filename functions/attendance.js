@@ -1,5 +1,5 @@
-import { verifyAdminSession, createAdminCookie, timingSafeEqualStr } from './_lib/auth.js';
-import { exportAttendance, getRecentLoginRejections, countPendingLogins } from './_lib/db.js';
+import { verifyAdminSession, createAdminCookie, timingSafeEqualStr } from './_lib/adminAuth.js';
+import { exportAttendance } from './_lib/db.js';
 import { dbValueToLabel } from './_lib/eventTypes.js';
 import { html } from './_lib/http.js';
 import { checkFixedWindow } from './_lib/rateLimit.js';
@@ -47,12 +47,12 @@ function passwordFormPage(error) {
 </html>`;
 }
 
-function attendanceTablePage(rows, rejections, pendingCount) {
+// The rejected-sign-in and queued-email sections that used to sit below the
+// table went with the sign-in system: residents no longer submit an email
+// address, so there is nothing to reject and nothing to queue.
+function attendanceTablePage(rows) {
   const body = rows
     .map((r) => `<tr><td>${escapeHtml(r.event_date)}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(dbValueToLabel(r.event_type))}</td></tr>`)
-    .join('');
-  const rejectionBody = rejections
-    .map((r) => `<tr><td>${escapeHtml(r.timestamp)}</td><td>${escapeHtml(r.email)}</td><td>${escapeHtml(r.ip || '')}</td></tr>`)
     .join('');
   return `<!doctype html>
 <html>
@@ -63,16 +63,6 @@ function attendanceTablePage(rows, rejections, pendingCount) {
     <thead><tr><th>Date</th><th>Name</th><th>Event</th></tr></thead>
     <tbody>${body}</tbody>
   </table>
-
-  <h2>Recent sign-in attempts not on roster (${rejections.length})</h2>
-  <table>
-    <thead><tr><th>When</th><th>Email hint</th><th>IP</th></tr></thead>
-    <tbody>${rejectionBody}</tbody>
-  </table>
-
-  <h2>Emails queued for retry (${pendingCount})</h2>
-  <p>Sign-in emails that hit the Resend daily cap or failed to send — a scheduled
-  Worker retries these every 15 minutes.</p>
 </body>
 </html>`;
 }
@@ -85,9 +75,7 @@ export async function onRequestGet({ request, env }) {
   const sorted = [...results].sort(
     (a, b) => b.event_date.localeCompare(a.event_date) || a.name.localeCompare(b.name)
   );
-  const { results: rejections } = await getRecentLoginRejections(env.DB);
-  const pendingCount = await countPendingLogins(env.DB);
-  return html(attendanceTablePage(sorted, rejections, pendingCount), 200, ATTENDANCE_PAGE_HEADERS);
+  return html(attendanceTablePage(sorted), 200, ATTENDANCE_PAGE_HEADERS);
 }
 
 export async function onRequestPost({ request, env, waitUntil }) {

@@ -7,36 +7,14 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- There is nothing to do here. Check-in happens entirely on /checkin, which
+       the QR code opens directly, so this page exists only for the resident who
+       types the bare domain in and wonders where the app went. -->
   <div class="card">
     <h1>Resident Learning Check-In</h1>
-
-    <div id="login-screen">
-      <input id="email-input" type="email" placeholder="you@duke.edu" autocomplete="email" />
-      <div id="login-turnstile" class="challenge" data-sitekey="0x4AAAAAAD7jlOk1_ML_5VY1"></div>
-      <button id="login-button" disabled>Send sign-in link</button>
-      <p id="login-message" class="message"></p>
-    </div>
-
-    <div id="scan-screen" class="hidden">
-      <p id="welcome-message"></p>
-      <div id="scan-viewport" class="hidden">
-        <video id="scan-video" playsinline muted></video>
-      </div>
-      <canvas id="scan-canvas" class="hidden"></canvas>
-      <div id="zoom-controls" class="hidden">
-        <button type="button" id="zoom-out" class="zoom-step" aria-label="Zoom out">&minus;</button>
-        <input id="zoom-slider" type="range" min="1" max="4" step="0.1" value="1" aria-label="Camera zoom" />
-        <button type="button" id="zoom-in" class="zoom-step" aria-label="Zoom in">+</button>
-        <span id="zoom-level" aria-live="polite">1.0&times;</span>
-      </div>
-      <button id="scan-button">Scan QR Code</button>
-      <p id="scan-message" class="message"></p>
-      <button id="logout-button">Log out</button>
-    </div>
+    <p class="lede">Point your phone's camera at the QR code on the screen, then tap the link that appears.</p>
+    <p class="lede">Type your name on the page that opens. That's the whole thing — there is no password and nothing to install.</p>
+    <p class="hint">Code won't scan, or your name isn't recognised? See a chief resident.</p>
   </div>
-
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" integrity="sha384-b5Ya4Bq3qCyz39m2ISh+4DxjAIljdeFwK/BsXLuj9gugaNwAcj/ia15fxNZL9Nlx" crossorigin="anonymous"></script>
-  <script src="scan.js"></script>
 </body>
 </html>

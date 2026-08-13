@@ -1,62 +1,42 @@
-export async function getRosterEntry(db, email) {
-  return db.prepare('SELECT email, name, test_account FROM roster WHERE email = ?').bind(email).first();
+// Reads the whole roster so the Worker can resolve a typed name against it.
+//
+// A LIKE/= lookup on the typed string can't work: matching folds accents, case,
+// punctuation, suffixes and middle names (see functions/_lib/names.js), and
+// SQLite can't express that without a stored normalized column that Python and
+// JavaScript would both have to compute identically. ~100 rows is a cheap read,
+// and it keeps one normalizer in one language.
+export async function getRoster(db) {
+  const { results } = await db.prepare('SELECT email, name, test_account FROM roster').all();
+  return results;
 }
 
-export async function insertMagicLink(db, token, email, expiresAt) {
-  await db
-    .prepare('INSERT INTO magic_links (token, email, expires_at, used) VALUES (?, ?, ?, 0)')
-    .bind(token, email, expiresAt)
-    .run();
-}
-
-export async function getMagicLink(db, token) {
-  return db.prepare('SELECT token, email, expires_at, used FROM magic_links WHERE token = ?').bind(token).first();
-}
-
-// Atomically claims an unused, unexpired magic link. A separate SELECT followed
-// by UPDATE lets two concurrent requests both observe used=0 and both mint a
-// session cookie. UPDATE ... WHERE ... RETURNING makes exactly one request win.
-export async function consumeMagicLink(db, token, nowIso) {
-  return db
-    .prepare(
-      `UPDATE magic_links
-       SET used = 1
-       WHERE token = ? AND used = 0 AND expires_at >= ?
-       RETURNING email`
-    )
-    .bind(token, nowIso)
-    .first();
-}
-
-export async function hasCheckedIn(db, email, eventDate, eventType) {
+export async function hasCheckedIn(db, name, eventDate, eventType) {
   const row = await db
-    .prepare('SELECT 1 FROM attendance WHERE email = ? AND event_date = ? AND event_type = ?')
-    .bind(email, eventDate, eventType)
+    .prepare('SELECT 1 FROM attendance WHERE name = ? AND event_date = ? AND event_type = ?')
+    .bind(name, eventDate, eventType)
     .first();
   return !!row;
 }
 
 // Date-independent variant of hasCheckedIn, for ONCE_PER_RESIDENT event types
 // (see functions/_lib/eventTypes.js). Their QR has no expiry, so the only thing
-// stopping a resident scanning the same onboarding poster again next week is
-// this check plus the partial UNIQUE index backing it.
-export async function hasEverCheckedIn(db, email, eventType) {
+// stopping a resident resubmitting the same onboarding poster next week is this
+// check plus the partial UNIQUE index backing it.
+export async function hasEverCheckedIn(db, name, eventType) {
   const row = await db
-    .prepare('SELECT 1 FROM attendance WHERE email = ? AND event_type = ?')
-    .bind(email, eventType)
+    .prepare('SELECT 1 FROM attendance WHERE name = ? AND event_type = ?')
+    .bind(name, eventType)
     .first();
   return !!row;
 }
 
 // Returns true on success, false if a UNIQUE constraint violation occurred
 // (race-condition safety net for concurrent double-taps of the same event).
-export async function insertAttendance(db, { name, email, eventType, eventDate, timestamp }) {
+export async function insertAttendance(db, { name, eventType, eventDate, timestamp }) {
   try {
     await db
-      .prepare(
-        'INSERT INTO attendance (name, email, event_type, event_date, timestamp) VALUES (?, ?, ?, ?, ?)'
-      )
-      .bind(name, email, eventType, eventDate, timestamp)
+      .prepare('INSERT INTO attendance (name, event_type, event_date, timestamp) VALUES (?, ?, ?, ?)')
+      .bind(name, eventType, eventDate, timestamp)
       .run();
     return true;
   } catch (err) {
@@ -65,72 +45,9 @@ export async function insertAttendance(db, { name, email, eventType, eventDate, 
   }
 }
 
-export async function insertLoginRejection(db, email, ip) {
-  await db
-    .prepare('INSERT INTO login_rejections (email, ip, timestamp) VALUES (?, ?, ?)')
-    .bind(email, ip, new Date().toISOString())
-    .run();
-}
-
-export async function getRecentLoginRejections(db, limit = 50) {
-  return db
-    .prepare('SELECT email, ip, timestamp FROM login_rejections ORDER BY timestamp DESC LIMIT ?')
-    .bind(limit)
-    .all();
-}
-
-// Retry queue for magic-link sends that hit the Resend daily cap or failed
-// outright (drained by the separate scheduled retry-worker). UNIQUE(email)
-// means re-triggering an already-queued email is a no-op, not a duplicate row.
-export async function enqueuePendingLogin(db, email, ip, reason) {
-  await db
-    .prepare(
-      'INSERT OR IGNORE INTO pending_login_emails (email, ip, reason, attempts, created_at) VALUES (?, ?, ?, 0, ?)'
-    )
-    .bind(email, ip, reason, new Date().toISOString())
-    .run();
-}
-
-export async function getPendingLogins(db, limit) {
-  return db
-    .prepare('SELECT id, email, attempts FROM pending_login_emails ORDER BY created_at ASC LIMIT ?')
-    .bind(limit)
-    .all();
-}
-
-export async function countPendingLogins(db) {
-  const row = await db.prepare('SELECT COUNT(*) AS count FROM pending_login_emails').first();
-  return row ? row.count : 0;
-}
-
-export async function markPendingLoginAttempt(db, id) {
-  await db
-    .prepare('UPDATE pending_login_emails SET attempts = attempts + 1, last_attempt_at = ? WHERE id = ?')
-    .bind(new Date().toISOString(), id)
-    .run();
-}
-
-export async function deletePendingLogin(db, id) {
-  await db.prepare('DELETE FROM pending_login_emails WHERE id = ?').bind(id).run();
-}
-
-const RETENTION_DAYS = 30;
-
-// Prunes data with no ongoing purpose: magic links that are used or expired
-// (single-use, 45-minute TTL — nothing legitimate reads them after that), and
-// login_rejections/pending_login_emails past a 30-day retention window. Called
-// from the retry-worker's existing 15-minute cron tick.
-export async function cleanupStaleData(db) {
-  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  await db.prepare('DELETE FROM magic_links WHERE used = 1 OR expires_at < ?').bind(new Date().toISOString()).run();
-  await db.prepare('DELETE FROM login_rejections WHERE timestamp < ?').bind(cutoff).run();
-  await db.prepare('DELETE FROM pending_login_emails WHERE created_at < ?').bind(cutoff).run();
-}
-
-// email is deliberately excluded: the downstream residency dashboard joins on
-// name, not email, so shipping email here is pure exposure with no consumer —
-// a leaked ADMIN_EXPORT_KEY should reveal names/attendance, not every
-// resident's email address.
+// Shape is load-bearing: scrape_attendance.py reads {ok, rows:[{name, event_type,
+// event_date, timestamp}]} and appends (date, name, event) to the workbook's
+// AttendancePoints sheet. Changing a key here silently breaks the daily sync.
 export async function exportAttendance(db, since) {
   if (since) {
     return db

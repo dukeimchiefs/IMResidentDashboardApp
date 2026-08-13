@@ -3,12 +3,20 @@ import hmac
 import os
 import sys
 from datetime import date, datetime, timedelta
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import qrcode
 
 QR_SECRET = os.environ["QR_SECRET"]
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "assets", "qr")
+
+# The QR now encodes a full check-in URL rather than the bare "<type>:<token>"
+# payload the old in-app scanner read. That is the whole point of the rewrite: a
+# phone's built-in camera turns a URL into a tappable link and opens the form
+# directly, whereas a bare payload shows up as meaningless text and opens
+# nothing. Override with APP_URL when generating codes for a preview deployment.
+APP_URL = os.environ.get("APP_URL", "https://imresidentdashboardapp.pages.dev").rstrip("/")
 
 # Must mirror QR_PREFIXES in functions/_lib/eventTypes.js — adding a new event type
 # means updating both.
@@ -31,6 +39,17 @@ MULTI_DAY_WINDOWS = {
 
 TOKEN_HEX_LENGTH = 16  # must match TOKEN_HEX_LENGTH in functions/_lib/token.js
 
+# A URL is roughly three times longer than the old bare payload, which pushes the
+# symbol up a few QR versions — more modules in the same printed area, so each
+# module is physically smaller and harder to read from the back of a lecture
+# hall. box_size is raised from qrcode's default of 10 to keep the exported PNG
+# large enough that projecting or printing it big doesn't resample the modules
+# into mush. Error correction stays at the default M: raising it would add
+# modules back and make the distance problem worse, and these codes are shown on
+# clean screens rather than scuffed printouts.
+QR_BOX_SIZE = 14
+QR_BORDER = 4
+
 
 def today_et() -> str:
     return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
@@ -52,6 +71,17 @@ def compute_token(date_str: str, event_type: str) -> str:
     message = f"{date_str}:{event_type}".encode()
     digest = hmac.new(QR_SECRET.encode(), message, hashlib.sha256).hexdigest()
     return digest[:TOKEN_HEX_LENGTH]
+
+
+def checkin_url(event_type: str, token: str) -> str:
+    """The address the QR encodes.
+
+    The two halves of the old "<type>:<token>" payload become separate query
+    parameters; functions/checkin.js rejoins them before validating. Splitting
+    them keeps the event readable in the camera's link preview, so a resident can
+    see they are about to open "noon" and not something unexpected.
+    """
+    return f"{APP_URL}/checkin?" + urlencode({"e": event_type, "t": token})
 
 
 VALID_EVENT_TYPES = set(EVENT_TYPES) | set(MULTI_DAY_WINDOWS)
@@ -80,13 +110,15 @@ def main():
         else:
             token_date = date_str
         token = compute_token(token_date, event_type)
-        payload = f"{event_type}:{token}"
-        img = qrcode.make(payload)
+        url = checkin_url(event_type, token)
+        img = qrcode.QRCode(box_size=QR_BOX_SIZE, border=QR_BORDER)
+        img.add_data(url)
+        img.make(fit=True)
         # Fixed filenames, overwritten on each run — a stale QR simply stops matching
         # the Worker's recomputed token, so no archive/history is needed.
         out_path = os.path.join(OUTPUT_DIR, f"qr_{event_type}.png")
-        img.save(out_path)
-        print(f"{event_type}: {payload} -> {out_path}")
+        img.make_image().save(out_path)
+        print(f"{event_type}: {url} -> {out_path}")
 
 
 if __name__ == "__main__":

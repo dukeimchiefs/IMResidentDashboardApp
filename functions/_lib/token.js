@@ -1,5 +1,5 @@
 import { QR_PREFIXES, MULTI_DAY_WINDOWS, WEEKLY_TYPES } from './eventTypes.js';
-import { timingSafeEqualStr } from './auth.js';
+import { timingSafeEqualStr } from './adminAuth.js';
 
 const TOKEN_HEX_LENGTH = 16; // 16 hex chars = 8 bytes = 64 bits, plenty vs. guessing within a single day
 

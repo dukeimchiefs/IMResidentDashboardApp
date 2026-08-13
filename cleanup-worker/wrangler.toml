@@ -1,0 +1,19 @@
+name = "imresidentdashboardapp-cleanup"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+# Cloudflare Pages Functions cannot run Cron Triggers — scheduled execution
+# requires a standalone Worker, hence this separate deployable. It shares the
+# same D1 database as the main Pages project.
+#
+# Hourly, down from every 3 minutes: the old cadence was set by how long a
+# resident would stand at a lecture-room door waiting for a retried sign-in
+# email. Nothing waits on this tick any more — it only deletes rate-limit
+# counter rows whose window has elapsed, and those are small and few.
+[triggers]
+crons = ["0 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "attendance-db"
+database_id = "b989ffda-3604-4f37-a13d-e1c685848f9c"
