@@ -38,8 +38,9 @@ resident. See the header comment in `functions/_lib/names.js`.
 Anyone holding a QR image can check in under any roster name, from anywhere, until that
 code rotates. This is a deliberate trade for residents who could not work the previous
 email-and-magic-link flow. Weekly rotation bounds the window; Turnstile and the rate
-limits below bound the volume. If misuse becomes a problem, `check_for_misuse.sh` flags
-suspicious check-in timing patterns.
+limits below bound the volume. Check-in patterns are reviewed out-of-band by local-only
+tooling that is deliberately not part of this repository, and which flags candidates for
+a conversation rather than proof of anything.
 
 ## Stack
 

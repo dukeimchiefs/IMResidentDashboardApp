@@ -14,8 +14,21 @@ local-notes/
 CLAUDE.md
 
 # Local-only attendance-timing misuse check (script, wrapper, and its
-# generated report images) - never intended for GitHub.
+# generated report images) - never intended for GitHub. Superseded by
+# watchdog/, which is where its job lives now.
 /check_for_misuse.sh
+
+# Misuse tooling, in full — code as well as output, for the same reason
+# check_for_misuse.sh was excluded before it: publishing how check-ins are
+# vetted tells anyone minded to game it exactly what to avoid. The detectors
+# key on things a resident can trivially change once they know them, so the
+# thresholds are worth more kept off a public repository than they are worth
+# version-controlled.
+#
+# Output under watchdog/state/ additionally names residents outright and must
+# never be committed under any circumstances. `watchdog.py paths --check`
+# verifies this rule still bites.
+/watchdog/
 
 # ~/.gitignore has a blanket *.html rule; this repo's frontend is static HTML
 # and needs these tracked.
