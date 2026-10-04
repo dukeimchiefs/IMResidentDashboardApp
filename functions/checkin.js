@@ -3,13 +3,18 @@
 // A phone's native camera opens /checkin?e=<type>&t=<token> straight from the
 // posted QR. GET renders a form with one field; POST records the check-in and
 // renders the result. No sign-in, no session, no client-side scanner, and no
-// JSON API — a plain form post, so the only JavaScript on the page is
-// Turnstile's.
+// JSON API — a plain form post.
+//
+// The only JavaScript is Turnstile's, plus frontend/checkin-form.js, which
+// guards the submit button against the two ways this form could be posted with
+// no usable challenge token. Both are external files; script-src carries no
+// 'unsafe-inline'. The form still renders and posts if either fails to load,
+// though without Turnstile's there is no token and the post is refused.
 
 import { getRoster, hasCheckedIn, insertAttendance } from './_lib/db.js';
 import { validateScannedPayload, todayET } from './_lib/token.js';
 import { EVENT_TYPES } from './_lib/eventTypes.js';
-import { matchRosterName, normalizeName } from './_lib/names.js';
+import { matchRosterName, normalizeName, MAX_INPUT_LENGTH } from './_lib/names.js';
 import { html } from './_lib/http.js';
 import { checkFixedWindow } from './_lib/rateLimit.js';
 import { validateTurnstile } from './_lib/turnstile.js';
@@ -59,7 +64,23 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function page(bodyHtml, status = 200) {
+// Turnstile, and /checkin-form.js, which keeps the submit button disabled until
+// Turnstile has actually produced a token.
+//
+// The order and the plain `defer` are both load-bearing. Turnstile looks up the
+// widget's data-*-callback names once, when it renders, and silently drops any
+// that are not functions yet — for the life of the page. Deferred scripts run
+// in document order, so checkin-form.js has always defined them first. With
+// `async` on api.js a cached copy could run before checkin-form.js arrived,
+// leaving the button held for the script's full timeout with a token already
+// sitting in the form. A deferred script that fails to load is simply skipped,
+// so Turnstile still runs if ours never arrives.
+const FORM_SCRIPTS = `<script src="/checkin-form.js" defer></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" defer></script>`;
+
+// Only the form page gets scripts; the result pages have no widget to render
+// and no form to guard.
+function page(bodyHtml, status = 200, { formScripts = false } = {}) {
   return html(
     `<!doctype html>
 <html lang="en">
@@ -70,7 +91,7 @@ function page(bodyHtml, status = 200) {
 <style>${PAGE_STYLE}</style>
 </head>
 <body><div class="card">${bodyHtml}</div>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+${formScripts ? FORM_SCRIPTS : ''}
 </body>
 </html>`,
     status,
@@ -106,7 +127,7 @@ function formPage(eventKey, token, sitekey, { error = '', prefillName = '' } = {
   return page(`
     <h1 class="event">${escapeHtml(label)}</h1>
     <p class="date">${escapeHtml(friendlyDate(todayET()))}</p>
-    <form method="POST">
+    <form method="POST" id="checkin-form">
       <input type="hidden" name="e" value="${escapeHtml(eventKey)}">
       <input type="hidden" name="t" value="${escapeHtml(token)}">
       <label for="name">Your name</label>
@@ -114,12 +135,17 @@ function formPage(eventKey, token, sitekey, { error = '', prefillName = '' } = {
              autocomplete="name" autocapitalize="words" autocorrect="off" spellcheck="false"
              enterkeyhint="done" required autofocus>
       <div class="challenge">
-        <div class="cf-turnstile" data-sitekey="${escapeHtml(sitekey)}" data-action="checkin"></div>
+        <div class="cf-turnstile" data-sitekey="${escapeHtml(sitekey)}" data-action="checkin"
+             data-callback="checkinChallengeReady"
+             data-expired-callback="checkinChallengeExpired"
+             data-error-callback="checkinChallengeFailed"
+             data-refresh-expired="auto" data-retry="auto"></div>
       </div>
-      <button type="submit">Check in</button>
+      <button type="submit" id="checkin-submit">Check in</button>
     </form>
+    <p class="hint" id="checkin-note" hidden></p>
     ${error ? `<p class="hint" style="color:#c62828">${escapeHtml(error)}</p>` : ''}
-  `);
+  `, 200, { formScripts: true });
 }
 
 // Rejections that aren't the resident's fault get their own wording. A generic
@@ -127,6 +153,20 @@ function formPage(eventKey, token, sitekey, { error = '', prefillName = '' } = {
 // missing them, or the network dropped — and sends the chiefs chasing the wrong
 // thing.
 const STALE_MESSAGE = 'This code has expired. Ask for the current code to be put back on screen, then scan it again.';
+
+// Two different failures wore the same words until 2026-08-21, and the wording
+// belonged to only one of them. A spent or timed-out token IS fixed by
+// submitting again, because the re-rendered page mints a fresh one. A token
+// that never existed is not: the challenge never ran, so tapping again posts
+// the same nothing and gets the same refusal, indefinitely.
+//
+// The second message sends them back to the QR rather than to the reload
+// button: this page is the response to a POST, so reloading it re-sends that
+// POST — missing token included — behind a browser prompt asking whether to
+// submit the form again. Scanning is a clean GET.
+const CHALLENGE_EXPIRED_MESSAGE = 'The security check expired. Tap Check in once more.';
+const CHALLENGE_UNAVAILABLE_MESSAGE =
+  "The security check couldn't load on this network, so you are not checked in yet. Scan the code again — if it keeps failing, turn Wi-Fi off to use cellular data, or see a chief resident.";
 const INVALID_MESSAGE = "This isn't a valid check-in link. Scan the code on the screen rather than a photo of an older one.";
 
 // Shared by GET and POST: both need the same (e, t) pair validated the same way
@@ -196,7 +236,12 @@ export async function onRequestPost({ request, env }) {
   // Keyed on the normalized name so one resident's retries are capped without
   // the rest of the room sharing their budget. Normalizing first means
   // "Nick Brazeau" and "nick  brazeau" spend the same allowance.
-  const personKey = `${ip}|${normalizeName(typedName)}`;
+  //
+  // Capped because this runs ahead of Turnstile and the key is stored: without
+  // it, whatever a script posts as `name` is written to D1 at full length, 240
+  // times per window per address. Anything past the cap is refused by
+  // matchRosterName anyway.
+  const personKey = `${ip}|${normalizeName(typedName.slice(0, MAX_INPUT_LENGTH))}`;
   const personOk = await checkFixedWindow(env.DB, 'rl:checkin:person', personKey, PERSON_LIMIT, PERSON_WINDOW_SECONDS);
   if (!personOk) {
     return messagePage('Too many attempts', 'Please wait a few minutes and try again, or see a chief resident.', 'bad', 429);
@@ -211,12 +256,27 @@ export async function onRequestPost({ request, env }) {
     return messagePage('Check-in is temporarily unavailable', 'Please try again in a few minutes, or tell a chief resident.', 'bad', 503);
   }
 
+  // No token at all: the challenge never ran, so Cloudflare has nothing to
+  // rule on. validateTurnstile returns false for this without logging anything,
+  // which is why an entire conference of residents could fail this way and
+  // leave no trace at all — separate it out so `wrangler pages deployment tail`
+  // can tell it apart from a rejection.
+  if (typeof turnstileToken !== 'string' || !turnstileToken) {
+    console.warn('turnstile_missing_token', 'checkin');
+    return formPage(resolved.eventKey, token, sitekey, {
+      error: CHALLENGE_UNAVAILABLE_MESSAGE,
+      prefillName: typedName,
+    });
+  }
+
   // Re-renders the form rather than dead-ending: a Turnstile token is
   // single-use and expires after a few minutes, so a resident who filled the
   // field and then got distracted lands here through no fault of their own.
+  // /checkin-form.js resets the widget on expiry, so by the time this page is
+  // back on screen the retry it suggests has a fresh token to send.
   if (!(await validateTurnstile(env, turnstileToken, ip, 'checkin'))) {
     return formPage(resolved.eventKey, token, sitekey, {
-      error: 'The security check timed out. Tap Check in once more.',
+      error: CHALLENGE_EXPIRED_MESSAGE,
       prefillName: typedName,
     });
   }

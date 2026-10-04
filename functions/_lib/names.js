@@ -11,8 +11,8 @@
 // Matching runs in the Worker against roster rows read per request rather than
 // against a stored normalized column, deliberately: a `name_key` column would
 // have to be populated by scripts/seed_roster.py in Python and compared here in
-// JavaScript, and this repo already carries three of those hand-mirrored pairs
-// (QR_PREFIXES, WEEKLY_TYPES, MULTI_DAY_WINDOWS). A drifted normalizer fails
+// JavaScript, and this repo already carries two of those hand-mirrored pairs
+// (QR_PREFIXES, WEEKLY_TYPES). A drifted normalizer fails
 // far more quietly than a drifted event list. The roster is ~100 rows, so
 // reading it whole costs one indexed scan.
 
@@ -21,7 +21,7 @@
 // residents type them inconsistently, and the roster rarely carries them.
 const IGNORED_TOKENS = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'md', 'do', 'mbbs', 'phd', 'mph', 'dr']);
 
-const MAX_INPUT_LENGTH = 100;
+export const MAX_INPUT_LENGTH = 100;
 
 // Folds away every difference we consider cosmetic:
 //   - accents ("Núñez" -> "nunez"), so an ASCII keyboard can reach every name

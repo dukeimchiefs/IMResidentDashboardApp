@@ -43,8 +43,10 @@ function stubTurnstile(succeed = true) {
 // too.
 function fakeDb(rows = [], roster = [RESIDENT, TESTER]) {
   const attendance = [...rows];
+  const rateLimitKeys = [];
   return {
     attendance,
+    rateLimitKeys,
     prepare(sql) {
       const stmt = {
         args: [],
@@ -57,7 +59,10 @@ function fakeDb(rows = [], roster = [RESIDENT, TESTER]) {
           throw new Error(`unexpected all() query: ${sql}`);
         },
         async first() {
-          if (sql.includes('rate_limit_counters')) return { count: 1 };
+          if (sql.includes('rate_limit_counters')) {
+            rateLimitKeys.push(stmt.args[0]);
+            return { count: 1 };
+          }
           if (sql.includes('FROM attendance WHERE name = ? AND event_date = ? AND event_type = ?')) {
             const [name, date, type] = stmt.args;
             const hit = attendance.find((r) => r.name === name && r.event_date === date && r.event_type === type);
@@ -87,13 +92,17 @@ async function tokenFor(qrType, tokenDate) {
 
 // Submits the form the way a phone does: URL-encoded POST to the same URL the
 // QR opened, carrying the event, token, typed name and Turnstile response.
-async function submit(db, qrType, tokenDate, typedName, { token } = {}) {
-  const body = new URLSearchParams({
+async function submit(db, qrType, tokenDate, typedName, { token, challenge = 'stub-token' } = {}) {
+  const fields = {
     e: qrType,
     t: token ?? (await tokenFor(qrType, tokenDate)),
     name: typedName,
-    'cf-turnstile-response': 'stub-token',
-  });
+  };
+  // `challenge: null` posts the form the way a phone does when Turnstile never
+  // ran at all: the field is simply absent. That is a different failure from a
+  // token Cloudflare looked at and rejected, and it needs different advice.
+  if (challenge !== null) fields['cf-turnstile-response'] = challenge;
+  const body = new URLSearchParams(fields);
   const request = new Request('https://example.test/checkin', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -222,6 +231,89 @@ test('an ambiguous name asks for a middle initial instead of guessing', async ()
   }
 });
 
+test('the form arms the challenge callbacks and ships the script that uses them', async () => {
+  const { html } = await open(fakeDb(), 'noon', weekAnchorForToday());
+  // Renaming either end of these silently un-guards the button, which is the
+  // whole defect: a form that can be submitted with nothing to validate.
+  assert.match(html, /data-callback="checkinChallengeReady"/);
+  assert.match(html, /data-expired-callback="checkinChallengeExpired"/);
+  assert.match(html, /data-error-callback="checkinChallengeFailed"/);
+  assert.match(html, /src="\/checkin-form\.js"/);
+  assert.match(html, /id="checkin-submit"/);
+  assert.match(html, /id="checkin-form"/);
+});
+
+test('the guard script is ordered ahead of Turnstile, and neither is async', async () => {
+  const { html } = await open(fakeDb(), 'noon', weekAnchorForToday());
+  // Turnstile resolves the callback names once, at render, and drops any that
+  // are not defined yet. Document-order `defer` is the only thing guaranteeing
+  // they are; `async` on either tag turns it back into a race.
+  const guard = html.indexOf('src="/checkin-form.js"');
+  const turnstile = html.indexOf('turnstile/v0/api.js');
+  assert.ok(guard !== -1 && turnstile !== -1);
+  assert.ok(guard < turnstile, 'checkin-form.js must come before api.js');
+  assert.doesNotMatch(html, /<script[^>]*\basync\b/);
+});
+
+test('result pages load no scripts at all', async () => {
+  const restore = stubTurnstile();
+  try {
+    const { html } = await submit(fakeDb(), 'noon', weekAnchorForToday(), 'Test Resident');
+    assert.match(html, /checked in/i);
+    assert.doesNotMatch(html, /<script/);
+  } finally {
+    restore();
+  }
+});
+
+test('an oversized name cannot inflate the stored rate-limit key', async () => {
+  // The per-person limit runs before Turnstile, so its key is whatever a script
+  // chooses to post. Uncapped, that is an arbitrary-size write to D1.
+  const restore = stubTurnstile();
+  try {
+    const db = fakeDb();
+    const { html } = await submit(db, 'noon', weekAnchorForToday(), 'a'.repeat(50000));
+    assert.match(html, /type your name/i);
+    assert.equal(db.rateLimitKeys.length, 2);
+    for (const key of db.rateLimitKeys) assert.ok(key.length < 200, `key is ${key.length} chars`);
+  } finally {
+    restore();
+  }
+});
+
+test('a submit carrying no challenge token is not told to just tap again', async () => {
+  const restore = stubTurnstile(false);
+  try {
+    const db = fakeDb();
+    const { status, html } = await submit(db, 'noon', weekAnchorForToday(), 'Test Resident', {
+      challenge: null,
+    });
+    assert.equal(status, 200);
+    // Matched without the apostrophe: escapeHtml renders it as &#39;.
+    assert.match(html, /load on this network/i);
+    // The advice that loops. Tapping again re-posts the same absent token and
+    // lands right back here — which is how a resident taps through a whole
+    // conference and is never recorded.
+    assert.doesNotMatch(html, /Tap Check in once more/i);
+    assert.match(html, /value="Test Resident"/);
+    assert.equal(db.attendance.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('a rejected token gets the wording a retry can actually fix', async () => {
+  const restore = stubTurnstile(false);
+  try {
+    const db = fakeDb();
+    const { html } = await submit(db, 'noon', weekAnchorForToday(), 'Test Resident');
+    assert.match(html, /security check expired/i);
+    assert.equal(db.attendance.length, 0);
+  } finally {
+    restore();
+  }
+});
+
 test('a failed security check re-renders the form instead of dead-ending', async () => {
   const restore = stubTurnstile(false);
   try {
@@ -247,9 +339,6 @@ test('a valid name with an invalid token records nothing', async () => {
     restore();
   }
 });
-
-
-
 
 test('lectures still allow one check-in per day, not one ever', async () => {
   const restore = stubTurnstile();
@@ -299,7 +388,6 @@ test('a test account can submit the same code without limit', async () => {
     restore();
   }
 });
-
 
 test('a test account still has its QR validated, not waved through', async () => {
   const restore = stubTurnstile();
