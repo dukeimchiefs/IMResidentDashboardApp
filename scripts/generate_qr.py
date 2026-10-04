@@ -80,9 +80,8 @@ VALID_EVENT_TYPES = set(EVENT_TYPES)
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     date_str = today_et()
-    # Which event types to (re)generate this run. Defaults to all of them, but callers
-    # (e.g. the daily vs. weekly GitHub Actions workflows) pass an explicit subset so a
-    # weekly-only event's QR isn't needlessly regenerated and committed every day.
+    # Which event types to (re)generate this run. Defaults to all of them; the
+    # rotate-qr workflow's manual trigger can pass a subset to redo one code.
     types_to_generate = sys.argv[1:] or EVENT_TYPES
     # event_type feeds directly into an output filename below (and, via the
     # GitHub Actions workflow_dispatch input, can originate outside this repo's

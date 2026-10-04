@@ -69,6 +69,9 @@ wrangler d1 execute attendance-db --remote --file=./migrate_qr_form_checkin.sql
 ```
 
 Run it once per database (local and remote). It preserves every existing attendance row.
+Production was migrated in August 2026 and now matches `schema.sql` exactly; the older
+one-off migrations that led up to it were written against the email-keyed table and have
+been removed (they are in git history, and must not be run against the current schema).
 If `attendance.event_type`'s CHECK constraint changes later (e.g. adding an event type),
 SQLite can't alter a CHECK in place — write a new one-off `migrate_*.sql` the same way.
 
@@ -87,6 +90,27 @@ sitekey's widget mode to Invisible in the Cloudflare dashboard** so residents ne
 challenge. `/attendance` is additionally protected at the edge by a Cloudflare Access
 application requiring the administrator identity and MFA.
 
+The form's submit button is held by `frontend/checkin-form.js` until Turnstile has
+produced a token, and offers a retry if it never does — without that, a challenge that
+failed to load let a resident tap Check in indefinitely and never be recorded.
+`functions/checkin.js` loads that script *before* Turnstile's, both with plain `defer`;
+the order is load-bearing (see the comment there).
+
+### 1c. Cleanup Worker (`cleanup-worker/`)
+
+Cloudflare Pages Functions can't run Cron Triggers, so scheduled work lives in its own
+standalone Worker sharing the same D1 database. It now does exactly one thing: delete
+`rate_limit_counters` rows whose window has elapsed. This is not optional — a D1 table has
+no equivalent of KV's `expirationTtl`, so without this tick the table grows forever.
+
+```sh
+cd cleanup-worker
+wrangler deploy
+```
+
+Redeploy it any time `src/index.js` or the shared `functions/_lib/*` modules it imports
+change — it does **not** get redeployed by the Pages project's git-triggered builds.
+
 ### 2. Pages project secrets
 
 ```sh
@@ -98,9 +122,6 @@ wrangler pages secret put ADMIN_PASSWORD       --project-name=imresidentdashboar
 wrangler pages secret put TURNSTILE_SECRET     --project-name=imresidentdashboardapp  # server-side Turnstile Siteverify secret
 wrangler pages secret put SECURITY_ALERT_EMAIL --project-name=imresidentdashboardapp  # recipient for repeated admin/export auth failure alerts
 ```
-
-`SESSION_SECRET` is no longer used and can be deleted — nothing signs a resident cookie
-any more.
 
 **`QR_SECRET` must be set to the exact same value in two places** — here (Pages secret)
 and as a GitHub Actions repository secret (Settings → Secrets and variables → Actions →
@@ -122,28 +143,6 @@ tuning that the old magic-link emails needed no longer applies — Exchange Onli
 Protection's scoring of message shape was a concern for ~170 `@duke.edu` inboxes, not for
 one alert recipient. The Resend free-tier cap of 100 sends/day is likewise no longer a
 constraint worth engineering around.
-
-### 1c. Cleanup Worker (`cleanup-worker/`)
-
-Cloudflare Pages Functions can't run Cron Triggers, so scheduled work lives in its own
-standalone Worker sharing the same D1 database. It now does exactly one thing: delete
-`rate_limit_counters` rows whose window has elapsed. This is not optional — a D1 table has
-no equivalent of KV's `expirationTtl`, so without this tick the table grows forever.
-
-```sh
-cd cleanup-worker
-wrangler deploy
-```
-
-Redeploy it any time `src/index.js` or the shared `functions/_lib/*` modules it imports
-change — it does **not** get redeployed by the Pages project's git-triggered builds.
-
-> **Migrating from the old retry worker:** this directory was `retry-worker/` and deployed
-> under the name `imresidentdashboardapp-retry`. Renaming it here creates a *new* Worker
-> and leaves the old one running its last-deployed code on a 3-minute cron — code that
-> queries the now-dropped `magic_links` and `pending_login_emails` tables and will error
-> every tick. Delete `imresidentdashboardapp-retry` in the Cloudflare dashboard
-> (Workers & Pages → the worker → Settings → Delete) after deploying this one.
 
 ### 3. Connect Cloudflare Pages to this repo
 

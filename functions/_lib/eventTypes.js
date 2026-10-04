@@ -25,7 +25,8 @@ export const WEEKLY_TYPES = ['noon', 'learning', 'grandrounds'];
 // 'welcome' was a one-per-resident onboarding poster with a QR that never
 // expired. It was retired 2026-08-13 with 27 rows recorded; those rows still
 // count toward residents' points, so neither they nor this label may be dropped.
-// scripts/../scrape_attendance.py likewise still maps 'welcome' for the same reason.
+// scrape_attendance.py in the sibling dashboard repo likewise still maps
+// 'welcome' for the same reason.
 const RETIRED_LABELS = {
   welcome: 'Welcome',
 };
